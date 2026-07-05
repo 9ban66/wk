@@ -1,5 +1,7 @@
 # exclude exe
 *.exe
+!utils/assets/tencentCollect.exe
+!utils/assets/tencentPowSolve.exe
 .idea
 examples/*.yaml
 examples/*.db
