@@ -3,12 +3,12 @@ set -euo pipefail
 
 # 一键安装脚本
 # 使用方式：
-#   curl -fsSL https://raw.githubusercontent.com/yatori-dev/yatori-go-core/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/9ban66/wk/main/install.sh | bash
 #   或者：
 #   bash install.sh
 
-REPO_URL="${REPO_URL:-https://github.com/yatori-dev/yatori-go-core.git}"
-REPO_DIR="${REPO_DIR:-$HOME/yatori-go-core}"
+REPO_URL="${REPO_URL:-https://github.com/9ban66/wk.git}"
+REPO_DIR="${REPO_DIR:-$HOME/wk}"
 BRANCH="${BRANCH:-main}"
 PORT="${PORT:-8080}"
 APP_NAME="yatori-web"

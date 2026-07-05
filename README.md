@@ -18,12 +18,12 @@
 
 ## 🚀一键安装（Linux）
 ```bash
-curl -fsSL https://raw.githubusercontent.com/yatori-dev/yatori-go-core/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/9ban66/wk/main/install.sh | bash
 ```
 
 如果你想使用自定义仓库地址或端口，也可以这样：
 ```bash
-REPO_URL=https://github.com/你的用户名/你的仓库.git PORT=8081 bash install.sh
+REPO_URL=https://github.com/9ban66/wk.git PORT=8081 bash install.sh
 ```
 
 脚本会自动：
@@ -57,4 +57,3 @@ yatori-go-core
 
 
 ![Stargazers over time](https://starchart.cc/yatori-dev/yatori-go-core.svg?variant=adaptive)
-
