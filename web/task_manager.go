@@ -81,6 +81,22 @@ func (s *taskStore) list() []Task {
 	return out
 }
 
+func (s *taskStore) find(platform, account string) []Task {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]Task, 0)
+	for _, task := range s.tasks {
+		if platform != "" && task.Platform != platform {
+			continue
+		}
+		if account != "" && task.Account != account {
+			continue
+		}
+		out = append(out, *task)
+	}
+	return out
+}
+
 func (s *taskStore) get(id string) (Task, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -183,5 +199,11 @@ func (s *taskStore) appendLogOnly(id, level, message string) bool {
 			Level:   level,
 			Message: message,
 		})
+	})
+}
+
+func (s *taskStore) clearLogs(id string) bool {
+	return s.update(id, func(task *Task) {
+		task.Logs = nil
 	})
 }

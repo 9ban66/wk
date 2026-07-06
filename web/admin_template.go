@@ -16,7 +16,10 @@ const adminHTML = `<!DOCTYPE html>
 :root{--bg:#f5f7fb;--panel:#fff;--line:#d8e0ea;--text:#172033;--muted:#667085;--primary:#2563eb;--ok:#15803d;--warn:#a16207;--bad:#b42318;--paused:#6d28d9}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",Arial,sans-serif}
-button{font:inherit;border:0;cursor:pointer}
+button,input{font:inherit}
+button{border:0;cursor:pointer}
+input{height:38px;border:1px solid #cfd8e3;border-radius:7px;padding:0 11px;outline:none}
+input:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(37,99,235,.13)}
 .topbar{height:58px;display:flex;align-items:center;justify-content:space-between;padding:0 22px;background:#fff;border-bottom:1px solid var(--line)}
 .brand{font-size:17px;font-weight:760}
 .summary{font-size:13px;color:var(--muted)}
@@ -49,13 +52,32 @@ tr.active{background:#eef5ff}
 .log-time{color:#93c5fd}.log-info{color:#fbbf24}.log-success{color:#86efac}.log-error{color:#fb7185}
 .detail{display:grid;gap:6px;padding:12px 14px;border-bottom:1px solid var(--line);font-size:13px}
 .detail strong{font-weight:720}
+.auth{position:fixed;inset:0;display:grid;place-items:center;background:rgba(245,247,251,.92);z-index:10}
+.auth-card{width:min(360px,calc(100vw - 32px));background:#fff;border:1px solid var(--line);border-radius:8px;padding:18px;box-shadow:0 18px 45px rgba(24,34,48,.12)}
+.auth-card h1{font-size:18px;margin:0 0 12px}
+.auth-card form{display:grid;gap:10px}
+.auth-error{min-height:18px;color:var(--bad);font-size:13px}
+.hidden{display:none!important}
 @media (max-width:1100px){.layout{grid-template-columns:1fr}.log-box{height:360px}.table-wrap{max-height:none}}
 </style>
 </head>
 <body>
+<div class="auth" id="authPanel">
+  <div class="auth-card">
+    <h1>后台密钥</h1>
+    <form id="loginForm">
+      <input id="adminKey" type="password" autocomplete="current-password" placeholder="输入后台密钥">
+      <button class="btn primary" type="submit">登录</button>
+      <div class="auth-error" id="authError"></div>
+    </form>
+  </div>
+</div>
 <header class="topbar">
   <div class="brand">Yatori 管理后台</div>
-  <div class="summary" id="summary">加载中</div>
+  <div class="tools">
+    <div class="summary" id="summary">加载中</div>
+    <button class="btn" id="logoutBtn">退出</button>
+  </div>
 </header>
 <main class="layout">
   <section class="panel">
@@ -88,6 +110,7 @@ tr.active{background:#eef5ff}
         <button class="btn primary" id="startBtn" disabled>启动</button>
         <button class="btn" id="pauseBtn" disabled>暂停</button>
         <button class="btn danger" id="stopBtn" disabled>停止</button>
+        <button class="btn danger" id="clearLogsBtn" disabled>删除日志</button>
       </div>
     </div>
     <div class="detail" id="detail">
@@ -170,6 +193,7 @@ function setButtons(task){
   $("startBtn").disabled = !task || !(task.status === "queued" || task.status === "paused");
   $("pauseBtn").disabled = !task || task.status !== "running";
   $("stopBtn").disabled = !task || ["succeeded","failed","stopped"].includes(task.status);
+  $("clearLogsBtn").disabled = !task;
 }
 
 function appendLog(log){
@@ -185,8 +209,14 @@ function appendLog(log){
 }
 
 async function loadTasks(){
-  const res = await fetch("/tasks");
+  const res = await fetch("/admin/tasks");
+  if(res.status === 401){
+    showLogin();
+    return;
+  }
+  if(!res.ok) throw new Error(await res.text() || res.statusText);
   state.tasks = await res.json();
+  hideLogin();
   renderTasks();
   const running = state.tasks.filter(t => t.status === "running").length;
   $("summary").textContent = "任务 " + state.tasks.length + " 个，运行中 " + running + " 个";
@@ -201,9 +231,9 @@ async function selectTask(id){
   renderDetail(task);
   $("logs").innerHTML = "";
   $("logs").dataset.empty = "true";
-  const logs = await fetch("/tasks/" + encodeURIComponent(id) + "/logs").then(r=>r.json());
+  const logs = await fetch("/admin/tasks/" + encodeURIComponent(id) + "/logs").then(r=>r.json());
   logs.forEach(appendLog);
-  state.events = new EventSource("/tasks/" + encodeURIComponent(id) + "/events?after=" + logs.length);
+  state.events = new EventSource("/admin/tasks/" + encodeURIComponent(id) + "/events?after=" + logs.length);
   state.events.onmessage = (event) => appendLog(JSON.parse(event.data));
   state.events.addEventListener("done", () => {
     if(state.events){ state.events.close(); state.events = null; }
@@ -222,10 +252,62 @@ async function control(action){
   }
 }
 
+function showLogin(){
+  $("authPanel").classList.remove("hidden");
+}
+
+function hideLogin(){
+  $("authPanel").classList.add("hidden");
+  $("authError").textContent = "";
+}
+
+async function clearLogs(){
+  if(!state.selected) return;
+  if(!confirm("确定删除所选任务的日志吗？")) return;
+  try{
+    const res = await fetch("/admin/tasks/" + encodeURIComponent(state.selected) + "/logs", {method:"DELETE"});
+    const text = await res.text();
+    if(!res.ok) throw new Error(text || res.statusText);
+    if(state.events){ state.events.close(); state.events = null; }
+    $("logs").innerHTML = '<div class="log-line">日志已删除</div>';
+    $("logs").dataset.empty = "true";
+    await loadTasks();
+  }catch(err){
+    alert(err.message);
+  }
+}
+
+async function login(key){
+  const res = await fetch("/admin/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({key})});
+  const text = await res.text();
+  if(!res.ok) throw new Error(text || res.statusText);
+  hideLogin();
+  await loadTasks();
+}
+
+async function logout(){
+  await fetch("/admin/logout",{method:"POST"});
+  if(state.events){ state.events.close(); state.events = null; }
+  state.tasks = [];
+  state.selected = "";
+  renderTasks();
+  showLogin();
+}
+
+$("loginForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try{
+    await login($("adminKey").value);
+  }catch(err){
+    $("authError").textContent = err.message;
+  }
+});
 $("refresh").addEventListener("click", loadTasks);
 $("startBtn").addEventListener("click", () => control("resume"));
 $("pauseBtn").addEventListener("click", () => control("pause"));
 $("stopBtn").addEventListener("click", () => control("stop"));
+$("clearLogsBtn").addEventListener("click", clearLogs);
+$("logoutBtn").addEventListener("click", logout);
 loadTasks();
 setInterval(loadTasks, 3500);
 </script>

@@ -12,6 +12,7 @@ REPO_DIR="${REPO_DIR:-$HOME/wk}"
 BRANCH="${BRANCH:-main}"
 PORT="${PORT:-8080}"
 APP_NAME="yatori-web"
+ADMIN_KEY="${ADMIN_KEY:-yatori-admin}"
 
 command_exists() {
   command -v "$1" >/dev/null 2>&1
@@ -102,9 +103,11 @@ start_service() {
   fi
 
   echo "启动服务，监听端口 $PORT"
-  nohup "$REPO_DIR/$APP_NAME" -addr ":$PORT" > "$REPO_DIR/${APP_NAME}.log" 2>&1 &
+  nohup env ADMIN_KEY="$ADMIN_KEY" "$REPO_DIR/$APP_NAME" -addr ":$PORT" > "$REPO_DIR/${APP_NAME}.log" 2>&1 &
   echo "服务已启动"
   echo "访问地址: http://127.0.0.1:$PORT/"
+  echo "后台地址: http://127.0.0.1:$PORT/admin"
+  echo "后台密钥: $ADMIN_KEY"
   echo "日志文件: $REPO_DIR/${APP_NAME}.log"
 }
 

@@ -74,3 +74,35 @@ func TestTaskStoreControlTimestamps(t *testing.T) {
 		t.Fatal("expected ended time to be recorded")
 	}
 }
+
+func TestTaskStoreFindByPlatformAndAccount(t *testing.T) {
+	store := newTaskStore()
+	store.enqueue(Task{Platform: "haiqikeji", Account: "demo"})
+	store.enqueue(Task{Platform: "yinghua", Account: "demo"})
+	store.enqueue(Task{Platform: "haiqikeji", Account: "other"})
+
+	got := store.find("haiqikeji", "demo")
+	if len(got) != 1 {
+		t.Fatalf("expected 1 matching task, got %d", len(got))
+	}
+	if got[0].Platform != "haiqikeji" || got[0].Account != "demo" {
+		t.Fatalf("unexpected task: %+v", got[0])
+	}
+}
+
+func TestTaskStoreClearLogs(t *testing.T) {
+	store := newTaskStore()
+	task := store.enqueue(Task{Platform: "haiqikeji", Account: "demo"})
+	store.appendLog(task.ID, "info", "hello")
+
+	if !store.clearLogs(task.ID) {
+		t.Fatal("expected clear logs to succeed")
+	}
+	updated, ok := store.get(task.ID)
+	if !ok {
+		t.Fatal("expected task to exist")
+	}
+	if len(updated.Logs) != 0 {
+		t.Fatalf("expected logs to be cleared, got %d", len(updated.Logs))
+	}
+}

@@ -90,11 +90,17 @@ input:focus,select:focus,textarea:focus{border-color:var(--primary);box-shadow:0
 .log-level.error{color:#fb7185}
 .log-level.success{color:#86efac}
 .hint{color:var(--muted);font-size:12px}
+.query-box{margin-top:18px;border-top:1px solid var(--line);padding-top:16px}
+.query-form{display:grid;grid-template-columns:150px 1fr auto;gap:10px;align-items:end}
+.query-results{margin-top:10px;border:1px solid var(--line);border-radius:8px;background:var(--panel-2);max-height:180px;overflow:auto}
+.query-item{display:grid;grid-template-columns:1fr auto;gap:10px;padding:10px 12px;border-bottom:1px solid var(--line);font-size:13px}
+.query-item:last-child{border-bottom:0}
 @media (max-width:980px){
   .workspace{grid-template-columns:1fr;padding:12px}
   .topbar{padding:0 16px}
   .grid{grid-template-columns:1fr}
   .split{grid-template-rows:auto auto}
+  .query-form{grid-template-columns:1fr}
 }
 </style>
 </head>
@@ -178,6 +184,25 @@ input:focus,select:focus,textarea:focus{border-color:var(--primary);box-shadow:0
             <button class="btn ghost" type="button" id="refreshTasks">刷新任务</button>
           </div>
         </form>
+        <div class="query-box">
+          <div class="panel-title">查询状态</div>
+          <div class="query-form">
+            <div class="field">
+              <label for="queryPlatform">平台</label>
+              <select id="queryPlatform">
+                <option value="haiqikeji">海奇科技</option>
+                <option value="yinghua">英华</option>
+                <option value="xuexitong">学习通</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="queryAccount">登录账号</label>
+              <input id="queryAccount" placeholder="输入提交任务时的账号">
+            </div>
+            <button class="btn ghost" type="button" id="queryTasks">查询</button>
+          </div>
+          <div class="query-results" id="queryResults"><div class="empty">输入账号后查询运行状态</div></div>
+        </div>
       </div>
     </section>
     <section class="split">
@@ -362,6 +387,41 @@ async function selectTask(id){
   });
 }
 
+function renderQueryResults(items){
+  const box = $("queryResults");
+  if(!items.length){
+    box.innerHTML = '<div class="empty">没有找到该账号的任务</div>';
+    return;
+  }
+  box.innerHTML = items.slice().reverse().map(t =>
+    '<div class="query-item">' +
+      '<div>' +
+        '<strong>' + escapeHTML(statusText[t.status] || t.status) + '</strong> · ' + escapeHTML(t.platform) + ' · ' + escapeHTML(t.id) +
+        '<div class="hint">' + escapeHTML(t.message || "") + '</div>' +
+        '<div class="hint">提交 ' + escapeHTML(formatTime(t.createdAt)) + ' · 运行 ' + escapeHTML(formatDuration(t)) + '</div>' +
+      '</div>' +
+      '<button class="btn mini ghost" type="button" data-query-id="' + escapeHTML(t.id) + '">查看</button>' +
+    '</div>').join("");
+  document.querySelectorAll("[data-query-id]").forEach(btn => btn.addEventListener("click", async () => {
+    await loadTasks();
+    selectTask(btn.dataset.queryId);
+  }));
+}
+
+async function queryTaskStatus(){
+  const platform = $("queryPlatform").value;
+  const account = $("queryAccount").value.trim();
+  if(!account){
+    $("queryResults").innerHTML = '<div class="empty">请输入登录账号</div>';
+    return;
+  }
+  const params = new URLSearchParams({platform, account});
+  const res = await fetch("/task-query?" + params.toString());
+  const text = await res.text();
+  if(!res.ok) throw new Error(text || res.statusText);
+  renderQueryResults(text ? JSON.parse(text) : []);
+}
+
 $("fetchCourses").addEventListener("click", async () => {
   const btn = $("fetchCourses");
   btn.disabled = true;
@@ -400,6 +460,23 @@ $("taskForm").addEventListener("submit", async (event) => {
 });
 
 $("refreshTasks").addEventListener("click", loadTasks);
+$("queryTasks").addEventListener("click", async () => {
+  const btn = $("queryTasks");
+  btn.disabled = true;
+  try{
+    await queryTaskStatus();
+  }catch(err){
+    $("queryResults").innerHTML = '<div class="empty">' + escapeHTML(err.message) + '</div>';
+  }finally{
+    btn.disabled = false;
+  }
+});
+$("queryAccount").addEventListener("keydown", (event) => {
+  if(event.key === "Enter"){
+    event.preventDefault();
+    $("queryTasks").click();
+  }
+});
 loadTasks();
 setInterval(loadTasks, 3500);
 </script>

@@ -1,11 +1,13 @@
 package web
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -23,6 +25,8 @@ import (
 type Server struct {
 	store *taskStore
 }
+
+const adminCookieName = "yatori_admin_key"
 
 type taskRequest struct {
 	Platform  string   `json:"platform"`
@@ -45,6 +49,20 @@ type CourseOption struct {
 	Ended    bool   `json:"ended"`
 }
 
+type TaskSummary struct {
+	ID             string     `json:"id"`
+	Platform       string     `json:"platform"`
+	Account        string     `json:"account"`
+	CourseIDs      []string   `json:"courseIds"`
+	Status         TaskStatus `json:"status"`
+	Message        string     `json:"message"`
+	CreatedAt      time.Time  `json:"createdAt"`
+	StartedAt      *time.Time `json:"startedAt,omitempty"`
+	EndedAt        *time.Time `json:"endedAt,omitempty"`
+	RuntimeSeconds int64      `json:"runtimeSeconds"`
+	UpdatedAt      time.Time  `json:"updatedAt"`
+}
+
 func NewServer() *Server {
 	return &Server{store: newTaskStore()}
 }
@@ -53,12 +71,49 @@ func (s *Server) Run(addr string) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.indexHandler)
 	mux.HandleFunc("/admin", s.adminHandler)
+	mux.HandleFunc("/admin/login", s.adminLoginHandler)
+	mux.HandleFunc("/admin/logout", s.adminLogoutHandler)
+	mux.HandleFunc("/admin/tasks", s.adminTasksHandler)
+	mux.HandleFunc("/admin/tasks/", s.adminTaskHandler)
 	mux.HandleFunc("/courses", s.coursesHandler)
 	mux.HandleFunc("/submit", s.submitHandler)
+	mux.HandleFunc("/task-query", s.taskQueryHandler)
 	mux.HandleFunc("/tasks", s.tasksHandler)
 	mux.HandleFunc("/tasks/", s.taskHandler)
 	log.Printf("web server listening on %s", addr)
 	return http.ListenAndServe(addr, mux)
+}
+
+func adminKey() string {
+	if key := strings.TrimSpace(os.Getenv("ADMIN_KEY")); key != "" {
+		return key
+	}
+	return "yatori-admin"
+}
+
+func (s *Server) isAdminRequest(r *http.Request) bool {
+	key := strings.TrimSpace(r.Header.Get("X-Admin-Key"))
+	if key == "" {
+		key = strings.TrimSpace(r.URL.Query().Get("key"))
+	}
+	if key == "" {
+		if cookie, err := r.Cookie(adminCookieName); err == nil {
+			key = strings.TrimSpace(cookie.Value)
+		}
+	}
+	expected := adminKey()
+	if key == "" || expected == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(key), []byte(expected)) == 1
+}
+
+func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
+	if s.isAdminRequest(r) {
+		return true
+	}
+	http.Error(w, "需要后台密钥", http.StatusUnauthorized)
+	return false
 }
 
 func (s *Server) indexHandler(w http.ResponseWriter, r *http.Request) {
@@ -81,6 +136,93 @@ func (s *Server) adminHandler(w http.ResponseWriter, r *http.Request) {
 	if err := tmpl.Execute(w, nil); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+func (s *Server) adminLoginHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var payload struct {
+		Key string `json:"key"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	key := strings.TrimSpace(payload.Key)
+	if key == "" || subtle.ConstantTimeCompare([]byte(key), []byte(adminKey())) != 1 {
+		http.Error(w, "密钥错误", http.StatusUnauthorized)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     adminCookieName,
+		Value:    key,
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   86400 * 7,
+	})
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+}
+
+func (s *Server) adminLogoutHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     adminCookieName,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   -1,
+	})
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+}
+
+func (s *Server) adminTasksHandler(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(s.store.list())
+}
+
+func (s *Server) adminTaskHandler(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	path := strings.TrimPrefix(r.URL.Path, "/admin/tasks/")
+	if strings.HasSuffix(path, "/logs") {
+		id := strings.TrimSuffix(path, "/logs")
+		switch r.Method {
+		case http.MethodGet:
+			s.taskLogsHandler(w, r, id)
+		case http.MethodDelete:
+			if !s.store.clearLogs(id) {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+		return
+	}
+	if strings.HasSuffix(path, "/events") {
+		s.taskEventsHandler(w, r, strings.TrimSuffix(path, "/events"))
+		return
+	}
+	http.NotFound(w, r)
 }
 
 func (s *Server) submitHandler(w http.ResponseWriter, r *http.Request) {
@@ -296,7 +438,46 @@ func courseEnded(end time.Time) bool {
 
 func (s *Server) tasksHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(s.store.list())
+	_ = json.NewEncoder(w).Encode(summarizeTasks(s.store.list()))
+}
+
+func (s *Server) taskQueryHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	platform := strings.TrimSpace(r.URL.Query().Get("platform"))
+	account := strings.TrimSpace(r.URL.Query().Get("account"))
+	if platform == "" || account == "" {
+		http.Error(w, "平台和账号不能为空", http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(summarizeTasks(s.store.find(platform, account)))
+}
+
+func summarizeTask(task Task) TaskSummary {
+	return TaskSummary{
+		ID:             task.ID,
+		Platform:       task.Platform,
+		Account:        task.Account,
+		CourseIDs:      task.CourseIDs,
+		Status:         task.Status,
+		Message:        task.Message,
+		CreatedAt:      task.CreatedAt,
+		StartedAt:      task.StartedAt,
+		EndedAt:        task.EndedAt,
+		RuntimeSeconds: task.RuntimeSeconds,
+		UpdatedAt:      task.UpdatedAt,
+	}
+}
+
+func summarizeTasks(tasks []Task) []TaskSummary {
+	summaries := make([]TaskSummary, 0, len(tasks))
+	for _, task := range tasks {
+		summaries = append(summaries, summarizeTask(task))
+	}
+	return summaries
 }
 
 func (s *Server) taskHandler(w http.ResponseWriter, r *http.Request) {
@@ -324,7 +505,7 @@ func (s *Server) taskHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(task)
+	_ = json.NewEncoder(w).Encode(summarizeTask(task))
 }
 
 func (s *Server) taskControlHandler(w http.ResponseWriter, r *http.Request, id string) {
