@@ -14,43 +14,61 @@ import (
 	"github.com/yatori-dev/yatori-go-core/utils/log"
 )
 
+var errYingHuaBadCaptcha = errors.New("yinghua bad captcha")
+
 // YingHuaLoginAction 登录API聚合整理
 // {"refresh_code":1,"status":false,"msg":"账号密码不正确"}
 // {"_code": 1, "status": false,"msg": "账号登录超时，请重新登录", "result": {}}
 func YingHuaLoginAction(cache *yinghuaApi.YingHuaUserCache) error {
-	for {
-		path, _ := cache.VerificationCodeApi(10) //获取验证码
-		if path == "" {                          //如果path为空，那么可能是账号问题
-			return errors.New("无法正常获取对应网站验证码，请检查对应url是否正常")
+	const maxLoginAttempts = 5
+	for attempt := 1; attempt <= maxLoginAttempts; attempt++ {
+		path, _ := cache.VerificationCodeApi(3)
+		if path == "" {
+			return errors.New("无法正常获取英华验证码，请检查平台地址是否正确")
 		}
-		img, _ := utils.ReadImg(path) //读取验证码图片
-		//codeResult := utils.AutoVerification(img, ort.NewShape(1, 18)) //自动识别
+		img, _ := utils.ReadImg(path)
 		codeResult := ddddocr.SemiOCRVerification(img, ort.NewShape(1, 18))
-		utils.DeleteFile(path)                //删除验证码文件
-		cache.SetVerCode(codeResult)          //填写验证码
-		jsonStr, _ := cache.LoginApi(10, nil) //执行登录
-		log.Print(log.DEBUG, "["+cache.Account+"] "+"LoginAction---"+jsonStr)
-		if gojsonq.New().JSONString(jsonStr).Find("msg") == "验证码有误！" {
-			continue
-		} else if strings.Contains(jsonStr, ">选择学校<") {
-			return fmt.Errorf("请填写正确的url链接，英华的url可能首页和登录后的是不一样的，以登录后的url为准。")
-		} else if gojsonq.New().JSONString(jsonStr).Find("redirect") == nil {
-			if gojsonq.New().JSONString(jsonStr).Find("msg") == nil { // 如果登录不成功并且msg也返回空那么直接重新再登录一遍
-				continue
-			}
-			return errors.New(gojsonq.New().JSONString(jsonStr).Find("msg").(string))
+		utils.DeleteFile(path)
+		if strings.TrimSpace(codeResult) == "" || strings.EqualFold(strings.TrimSpace(codeResult), "stub") {
+			return errors.New("英华登录失败：ddddocr 未正确启用，请确认已移除本地 stub replace，并使用 CGO_ENABLED=1 构建")
 		}
-		cache.SetToken(
-			strings.Split(
-				strings.Split(
-					gojsonq.New().JSONString(jsonStr).
-						Find("redirect").(string), "token=")[1], "&")[0]) //设置Token
-		cache.SetSign(
-			strings.Split(
-				gojsonq.New().JSONString(jsonStr).Find("redirect").(string), "&sign=")[1]) //设置签名
-		//log.Print(log.INFO, "["+cache.Account+"] "+" 登录成功")
-		break
+		cache.SetVerCode(codeResult)
+
+		jsonStr, err := cache.LoginApi(3, nil)
+		if err != nil {
+			return fmt.Errorf("英华登录请求失败: %w", err)
+		}
+		log.Print(log.DEBUG, "["+cache.Account+"] "+"LoginAction---"+jsonStr)
+		if err := applyYingHuaLoginResponse(cache, jsonStr); errors.Is(err, errYingHuaBadCaptcha) {
+			continue
+		} else {
+			return err
+		}
 	}
+	return errors.New("英华登录失败：验证码识别多次失败或平台响应异常")
+}
+
+func applyYingHuaLoginResponse(cache *yinghuaApi.YingHuaUserCache, jsonStr string) error {
+	msg := gojsonq.New().JSONString(jsonStr).Find("msg")
+	if msg == "验证码有误！" {
+		return errYingHuaBadCaptcha
+	}
+	if strings.Contains(jsonStr, ">选择学校<") {
+		return fmt.Errorf("请填写正确的英华登录后 URL，首页地址和登录后地址可能不一样")
+	}
+	redirect := gojsonq.New().JSONString(jsonStr).Find("redirect")
+	if redirect == nil {
+		if msg == nil {
+			return errors.New("英华登录响应异常，未返回登录跳转地址")
+		}
+		return errors.New(fmt.Sprint(msg))
+	}
+	redirectStr, ok := redirect.(string)
+	if !ok || !strings.Contains(redirectStr, "token=") || !strings.Contains(redirectStr, "&sign=") {
+		return errors.New("英华登录响应异常，登录跳转地址缺少 token 或 sign")
+	}
+	cache.SetToken(strings.Split(strings.Split(redirectStr, "token=")[1], "&")[0])
+	cache.SetSign(strings.Split(redirectStr, "&sign=")[1])
 	return nil
 }
 

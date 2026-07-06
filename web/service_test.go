@@ -25,3 +25,10 @@ func TestTaskStorePreservesAISettings(t *testing.T) {
 		t.Fatalf("expected AI settings to be preserved, got %+v", task)
 	}
 }
+
+func TestCleanStringList(t *testing.T) {
+	got := cleanStringList([]string{" 101 ", "", "102", "101", "  "})
+	if len(got) != 2 || got[0] != "101" || got[1] != "102" {
+		t.Fatalf("unexpected cleaned values: %#v", got)
+	}
+}

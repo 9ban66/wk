@@ -2,10 +2,6 @@ module github.com/yatori-dev/yatori-go-core
 
 go 1.24.0
 
-replace github.com/yalue/onnxruntime_go => ./third_party/onnxruntime_go
-
-replace github.com/Changbaiqi/ddddocr-go => ./third_party/ddddocr-go
-
 require (
 	github.com/Changbaiqi/ddddocr-go v0.1.5-0.20251217103242-1896343369f8 //0.1.4.5
 	github.com/PuerkitoBio/goquery v1.10.0

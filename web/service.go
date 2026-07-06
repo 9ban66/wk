@@ -3,7 +3,7 @@ package web
 import (
 	"encoding/json"
 	"fmt"
-	"html/template"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
@@ -11,17 +11,38 @@ import (
 	"time"
 
 	haiqikejiAggregation "github.com/yatori-dev/yatori-go-core/aggregation/haiqikeji"
-	haiqikejiApi "github.com/yatori-dev/yatori-go-core/api/haiqikeji"
 	xuexitongAggregation "github.com/yatori-dev/yatori-go-core/aggregation/xuexitong"
 	xuexitongPoint "github.com/yatori-dev/yatori-go-core/aggregation/xuexitong/point"
-	xuexitongApi "github.com/yatori-dev/yatori-go-core/api/xuexitong"
 	yinghuaAggregation "github.com/yatori-dev/yatori-go-core/aggregation/yinghua"
+	haiqikejiApi "github.com/yatori-dev/yatori-go-core/api/haiqikeji"
+	xuexitongApi "github.com/yatori-dev/yatori-go-core/api/xuexitong"
 	yinghuaApi "github.com/yatori-dev/yatori-go-core/api/yinghua"
 	"github.com/yatori-dev/yatori-go-core/models/ctype"
 )
 
 type Server struct {
 	store *taskStore
+}
+
+type taskRequest struct {
+	Platform  string   `json:"platform"`
+	Account   string   `json:"account"`
+	Password  string   `json:"password"`
+	PreURL    string   `json:"preUrl"`
+	CourseIDs []string `json:"courseIds"`
+	AIURL     string   `json:"aiUrl"`
+	AIModel   string   `json:"aiModel"`
+	AIKey     string   `json:"aiKey"`
+	AIType    string   `json:"aiType"`
+	Message   string   `json:"message"`
+}
+
+type CourseOption struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Meta     string `json:"meta,omitempty"`
+	Progress string `json:"progress,omitempty"`
+	Ended    bool   `json:"ended"`
 }
 
 func NewServer() *Server {
@@ -31,6 +52,8 @@ func NewServer() *Server {
 func (s *Server) Run(addr string) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.indexHandler)
+	mux.HandleFunc("/admin", s.adminHandler)
+	mux.HandleFunc("/courses", s.coursesHandler)
 	mux.HandleFunc("/submit", s.submitHandler)
 	mux.HandleFunc("/tasks", s.tasksHandler)
 	mux.HandleFunc("/tasks/", s.taskHandler)
@@ -43,30 +66,18 @@ func (s *Server) indexHandler(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	tmpl := template.Must(template.New("index").Parse(`<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><title>Yatori Web</title><style>body{font-family:Arial,sans-serif;max-width:760px;margin:32px auto;padding:16px}label{display:block;margin-top:12px}input,select,textarea{width:100%;padding:8px;margin-top:6px}button{margin-top:16px;padding:8px 12px}</style></head>
-<body>
-<h2>Yatori Web 任务提交</h2>
-<form action="/submit" method="post">
-<label>平台<select name="platform"><option value="haiqikeji">海旗</option><option value="yinghua">英华</option><option value="xuexitong">学习通</option></select></label>
-<label>账号<input name="account" required></label>
-<label>密码<input name="password" type="password" required></label>
-<label>平台地址<input name="preUrl" placeholder="海旗/英华填写站点地址；学习通可留空或填写登录后地址" ></label>
-<label>AI地址<input name="aiUrl" placeholder="可选：例如 https://api.example.com/v1"></label>
-<label>AI模型<input name="aiModel" placeholder="可选：例如 gpt-4o"></label>
-<label>AI密钥<input name="aiKey" placeholder="可选：填写你的 AI 调用密钥"></label>
-<label>AI类型<select name="aiType"><option value="">默认</option><option value="OPENAI">OpenAI</option><option value="DEEPSEEK">DeepSeek</option><option value="CHATGLM">ChatGLM</option><option value="TONGYI">通义</option><option value="DOUBAO">豆包</option><option value="OTHER">Other</option></select></label>
-<label>说明<textarea name="message" placeholder="可选：自定义说明"></textarea></label>
-<button type="submit">提交一键刷课任务</button>
-</form>
-<hr>
-<h3>最近任务</h3>
-<div id="tasks">加载中...</div>
-<script>
-fetch('/tasks').then(r=>r.json()).then(data=>{const el=document.getElementById('tasks'); if(!data.length){el.innerHTML='暂无任务';return;} el.innerHTML=data.map(t=>'<div style="border:1px solid #ddd;padding:10px;margin-top:8px"><div><b>'+t.platform+'</b> - '+t.account+'</div><div>状态:'+t.status+' | 任务ID:'+t.id+'</div><div>'+ (t.message || '') +'</div></div>').join('');}).catch(()=>{document.getElementById('tasks').innerHTML='加载失败';});
-</script>
-</body></html>`))
+	tmpl := newIndexTemplate()
+	if err := tmpl.Execute(w, nil); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func (s *Server) adminHandler(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/admin" {
+		http.NotFound(w, r)
+		return
+	}
+	tmpl := newAdminTemplate()
 	if err := tmpl.Execute(w, nil); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
@@ -77,31 +88,210 @@ func (s *Server) submitHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if err := r.ParseForm(); err != nil {
+	req, err := parseTaskRequest(r)
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	platform := strings.TrimSpace(r.Form.Get("platform"))
-	account := strings.TrimSpace(r.Form.Get("account"))
-	password := strings.TrimSpace(r.Form.Get("password"))
-	preURL := strings.TrimSpace(r.Form.Get("preUrl"))
-	aiURL := strings.TrimSpace(r.Form.Get("aiUrl"))
-	aiModel := strings.TrimSpace(r.Form.Get("aiModel"))
-	aiKey := strings.TrimSpace(r.Form.Get("aiKey"))
-	aiType := strings.TrimSpace(r.Form.Get("aiType"))
-	message := strings.TrimSpace(r.Form.Get("message"))
-	if platform == "" || account == "" || password == "" {
+	if req.Platform == "" || req.Account == "" || req.Password == "" {
 		http.Error(w, "平台、账号和密码不能为空", http.StatusBadRequest)
 		return
 	}
-	if platform != "xuexitong" && preURL == "" {
-		http.Error(w, "海旗和英华需要填写平台地址", http.StatusBadRequest)
+	if req.Platform != "xuexitong" && req.PreURL == "" {
+		http.Error(w, "海奇科技和英华需要填写平台地址", http.StatusBadRequest)
 		return
 	}
-	task := s.store.enqueue(Task{Platform: platform, Account: account, Password: password, PreURL: preURL, AIURL: aiURL, AIModel: aiModel, AIKey: aiKey, AIType: aiType, Message: message})
+	task := s.store.enqueue(Task{
+		Platform:  req.Platform,
+		Account:   req.Account,
+		Password:  req.Password,
+		PreURL:    req.PreURL,
+		CourseIDs: req.CourseIDs,
+		AIURL:     req.AIURL,
+		AIModel:   req.AIModel,
+		AIKey:     req.AIKey,
+		AIType:    req.AIType,
+		Message:   req.Message,
+	})
+	s.store.appendLog(task.ID, "info", "任务已进入队列")
 	go s.runTask(task.ID)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "task": task})
+}
+
+func parseTaskRequest(r *http.Request) (taskRequest, error) {
+	var req taskRequest
+	if strings.Contains(r.Header.Get("Content-Type"), "application/json") {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			return taskRequest{}, err
+		}
+	} else {
+		if err := r.ParseForm(); err != nil {
+			return taskRequest{}, err
+		}
+		req = taskRequest{
+			Platform:  r.Form.Get("platform"),
+			Account:   r.Form.Get("account"),
+			Password:  r.Form.Get("password"),
+			PreURL:    r.Form.Get("preUrl"),
+			CourseIDs: r.Form["courseIds"],
+			AIURL:     r.Form.Get("aiUrl"),
+			AIModel:   r.Form.Get("aiModel"),
+			AIKey:     r.Form.Get("aiKey"),
+			AIType:    r.Form.Get("aiType"),
+			Message:   r.Form.Get("message"),
+		}
+		if len(req.CourseIDs) == 0 {
+			req.CourseIDs = r.Form["courseId"]
+		}
+	}
+	req.Platform = strings.TrimSpace(req.Platform)
+	req.Account = strings.TrimSpace(req.Account)
+	req.Password = strings.TrimSpace(req.Password)
+	req.PreURL = strings.TrimSpace(req.PreURL)
+	req.AIURL = strings.TrimSpace(req.AIURL)
+	req.AIModel = strings.TrimSpace(req.AIModel)
+	req.AIKey = strings.TrimSpace(req.AIKey)
+	req.AIType = strings.TrimSpace(req.AIType)
+	req.Message = strings.TrimSpace(req.Message)
+	req.CourseIDs = cleanStringList(req.CourseIDs)
+	return req, nil
+}
+
+func cleanStringList(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func (s *Server) coursesHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	req, err := parseTaskRequest(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Platform == "" || req.Account == "" || req.Password == "" {
+		http.Error(w, "平台、账号和密码不能为空", http.StatusBadRequest)
+		return
+	}
+	if req.Platform != "xuexitong" && req.PreURL == "" {
+		http.Error(w, "海奇科技和英华需要填写平台地址", http.StatusBadRequest)
+		return
+	}
+	courses, err := fetchCourses(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(courses)
+}
+
+func fetchCourses(req taskRequest) ([]CourseOption, error) {
+	switch req.Platform {
+	case "haiqikeji":
+		cache := &haiqikejiApi.HqkjUserCache{PreUrl: req.PreURL, Account: req.Account, Password: req.Password}
+		if err := haiqikejiAggregation.HqkjLoginAction(cache); err != nil {
+			return nil, fmt.Errorf("海奇科技登录失败: %w", err)
+		}
+		courses, err := haiqikejiAggregation.HqkjCourseListAction(cache)
+		if err != nil {
+			return nil, fmt.Errorf("海奇科技拉取课程失败: %w", err)
+		}
+		options := make([]CourseOption, 0, len(courses))
+		for _, course := range courses {
+			meta := strings.TrimSpace(strings.Join(nonEmptyStrings(course.LecturerName, course.PeriodName, formatEndDate(course.EndDate), course.CollegeId), " · "))
+			ended := courseEnded(course.EndDate)
+			progress := "进行中"
+			if ended {
+				progress = "已结束"
+			}
+			options = append(options, CourseOption{ID: course.Id, Name: course.Name, Meta: meta, Progress: progress, Ended: ended})
+		}
+		return options, nil
+	case "yinghua":
+		cache := &yinghuaApi.YingHuaUserCache{PreUrl: req.PreURL, Account: req.Account, Password: req.Password}
+		if err := yinghuaAggregation.YingHuaLoginAction(cache); err != nil {
+			return nil, fmt.Errorf("英华登录失败: %w", err)
+		}
+		courses, err := yinghuaAggregation.CourseListAction(cache)
+		if err != nil {
+			return nil, fmt.Errorf("英华拉取课程失败: %w", err)
+		}
+		options := make([]CourseOption, 0, len(courses))
+		for _, course := range courses {
+			ended := courseEnded(course.EndDate)
+			meta := strings.TrimSpace(strings.Join(nonEmptyStrings(fmt.Sprintf("%d/%d 视频", course.VideoLearned, course.VideoCount), formatEndDate(course.EndDate)), " · "))
+			progress := fmt.Sprintf("%.0f%%", course.Progress)
+			if ended {
+				progress += " · 已结束"
+			}
+			options = append(options, CourseOption{ID: course.Id, Name: course.Name, Meta: meta, Progress: progress, Ended: ended})
+		}
+		return options, nil
+	case "xuexitong":
+		cache := &xuexitongApi.XueXiTUserCache{Name: req.Account, Password: req.Password}
+		if err := xuexitongAggregation.XueXiTLoginAction(cache); err != nil {
+			return nil, fmt.Errorf("学习通登录失败: %w", err)
+		}
+		courses, err := xuexitongAggregation.XueXiTPullCourseAction(cache)
+		if err != nil {
+			return nil, fmt.Errorf("学习通拉取课程失败: %w", err)
+		}
+		options := make([]CourseOption, 0, len(courses))
+		for _, course := range courses {
+			meta := strings.TrimSpace(strings.Join(nonEmptyStrings(course.CourseTeacher, "class "+course.Key), " · "))
+			ended := course.State == 1
+			progress := fmt.Sprintf("%d/%d", course.JobFinishCount, course.JobCount)
+			if course.State == 1 {
+				progress += " · 已结束"
+			}
+			options = append(options, CourseOption{ID: course.CourseID, Name: course.CourseName, Meta: meta, Progress: progress, Ended: ended})
+		}
+		return options, nil
+	default:
+		return nil, fmt.Errorf("unsupported platform %s", req.Platform)
+	}
+}
+
+func nonEmptyStrings(values ...string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func formatEndDate(end time.Time) string {
+	if end.IsZero() {
+		return ""
+	}
+	return "结束 " + end.Format("2006-01-02")
+}
+
+func courseEnded(end time.Time) bool {
+	if end.IsZero() {
+		return false
+	}
+	return time.Now().After(end.AddDate(0, 0, 1))
 }
 
 func (s *Server) tasksHandler(w http.ResponseWriter, r *http.Request) {
@@ -110,7 +300,20 @@ func (s *Server) tasksHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) taskHandler(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/tasks/")
+	path := strings.TrimPrefix(r.URL.Path, "/tasks/")
+	if strings.HasSuffix(path, "/logs") {
+		s.taskLogsHandler(w, r, strings.TrimSuffix(path, "/logs"))
+		return
+	}
+	if strings.HasSuffix(path, "/events") {
+		s.taskEventsHandler(w, r, strings.TrimSuffix(path, "/events"))
+		return
+	}
+	if strings.HasSuffix(path, "/control") {
+		s.taskControlHandler(w, r, strings.TrimSuffix(path, "/control"))
+		return
+	}
+	id := path
 	if id == "" {
 		http.NotFound(w, r)
 		return
@@ -124,17 +327,116 @@ func (s *Server) taskHandler(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(task)
 }
 
-func (s *Server) runTask(id string) {
-	if !s.store.update(id, func(task *Task) {
-		task.Status = TaskRunning
-		task.Message = "开始执行"
-	}) {
+func (s *Server) taskControlHandler(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	var payload struct {
+		Action string `json:"action"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	payload.Action = strings.TrimSpace(payload.Action)
+	var ok bool
+	switch payload.Action {
+	case "start", "resume":
+		ok = s.store.start(id)
+		if ok {
+			s.store.appendLogOnly(id, "info", "任务已启动/继续")
+		}
+	case "pause":
+		ok = s.store.pause(id)
+		if ok {
+			s.store.appendLogOnly(id, "info", "任务已请求暂停")
+		}
+	case "stop":
+		ok = s.store.stop(id)
+		if ok {
+			s.store.appendLogOnly(id, "info", "任务已请求停止")
+		}
+	default:
+		http.Error(w, "unsupported action", http.StatusBadRequest)
+		return
+	}
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	task, _ := s.store.get(id)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(task)
+}
+
+func (s *Server) taskLogsHandler(w http.ResponseWriter, r *http.Request, id string) {
+	task, ok := s.store.get(id)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(task.Logs)
+}
+
+func (s *Server) taskEventsHandler(w http.ResponseWriter, r *http.Request, id string) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	if _, ok := s.store.get(id); !ok {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	last := 0
+	if after := r.URL.Query().Get("after"); after != "" {
+		if n, err := strconv.Atoi(after); err == nil && n > 0 {
+			last = n
+		}
+	}
+	if lastEventID := r.Header.Get("Last-Event-ID"); lastEventID != "" {
+		if n, err := strconv.Atoi(lastEventID); err == nil && n >= last {
+			last = n + 1
+		}
+	}
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			task, ok := s.store.get(id)
+			if !ok {
+				return
+			}
+			for last < len(task.Logs) {
+				payload, _ := json.Marshal(task.Logs[last])
+				fmt.Fprintf(w, "id: %d\ndata: %s\n\n", last, payload)
+				last++
+			}
+			if task.Status == TaskSucceeded || task.Status == TaskFailed || task.Status == TaskStopped {
+				fmt.Fprint(w, "event: done\ndata: {}\n\n")
+				flusher.Flush()
+				return
+			}
+			flusher.Flush()
+		}
+	}
+}
+
+func (s *Server) runTask(id string) {
+	if !s.store.start(id) {
+		return
+	}
+	s.logTask(id, "info", "开始执行")
 	defer func() {
-		s.store.update(id, func(task *Task) {
-			task.Message = "执行结束"
-		})
+		s.store.appendLogOnly(id, "info", "执行结束")
 	}()
 
 	task, ok := s.store.get(id)
@@ -144,118 +446,561 @@ func (s *Server) runTask(id string) {
 	var err error
 	switch task.Platform {
 	case "haiqikeji":
-		err = s.runHaiqiTask(task)
+		err = s.runHaiqiTask(id, task)
 	case "yinghua":
-		err = s.runYinghuaTask(task)
+		err = s.runYinghuaTask(id, task)
 	case "xuexitong":
-		err = s.runXueXiTongTask(task)
+		err = s.runXueXiTongTask(id, task)
 	default:
 		err = fmt.Errorf("unsupported platform %s", task.Platform)
 	}
 	if err != nil {
-		s.store.update(id, func(task *Task) {
-			task.Status = TaskFailed
-			task.Message = err.Error()
-		})
+		if isTaskStopped(err) {
+			s.logTask(id, "info", "任务已停止")
+			return
+		}
+		s.logTask(id, "error", err.Error())
+		s.store.finish(id, TaskFailed, err.Error())
 		return
 	}
-	s.store.update(id, func(task *Task) {
-		task.Status = TaskSucceeded
-		task.Message = "任务已完成"
-	})
+	s.logTask(id, "success", "任务已完成")
+	s.store.finish(id, TaskSucceeded, "任务已完成")
 }
 
-func (s *Server) runHaiqiTask(task Task) error {
-	cache := &haiqikejiApi.HqkjUserCache{PreUrl: task.PreURL, Account: task.Account, Password: task.Password}
-	if err := haiqikejiAggregation.HqkjLoginAction(cache); err != nil {
-		return fmt.Errorf("海旗登录失败: %w", err)
+func (s *Server) logTask(id, level, message string) {
+	s.store.appendLog(id, level, message)
+}
+
+func isTaskStopped(err error) bool {
+	return err != nil && err.Error() == "task stopped"
+}
+
+func (s *Server) waitIfPausedOrStopped(id string) error {
+	for {
+		task, ok := s.store.get(id)
+		if !ok {
+			return fmt.Errorf("task stopped")
+		}
+		switch task.Status {
+		case TaskStopped:
+			return fmt.Errorf("task stopped")
+		case TaskPaused:
+			time.Sleep(500 * time.Millisecond)
+			continue
+		default:
+			return nil
+		}
 	}
+}
+
+func (s *Server) interruptibleSleep(id string, d time.Duration) error {
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		if err := s.waitIfPausedOrStopped(id); err != nil {
+			return err
+		}
+		remaining := time.Until(deadline)
+		if remaining > 500*time.Millisecond {
+			remaining = 500 * time.Millisecond
+		}
+		time.Sleep(remaining)
+	}
+	return s.waitIfPausedOrStopped(id)
+}
+
+func (s *Server) runHaiqiTask(id string, task Task) error {
+	if err := s.waitIfPausedOrStopped(id); err != nil {
+		return err
+	}
+	cache := &haiqikejiApi.HqkjUserCache{PreUrl: task.PreURL, Account: task.Account, Password: task.Password}
+	s.logTask(id, "info", "海奇科技登录中")
+	if err := haiqikejiAggregation.HqkjLoginAction(cache); err != nil {
+		return fmt.Errorf("海奇科技登录失败: %w", err)
+	}
+	s.logTask(id, "success", "海奇科技登录成功")
 	courses, err := haiqikejiAggregation.HqkjCourseListAction(cache)
 	if err != nil {
-		return fmt.Errorf("海旗拉取课程失败: %w", err)
+		return fmt.Errorf("海奇科技拉取课程失败: %w", err)
 	}
+	courses = filterHaiqiCourses(courses, task.CourseIDs)
 	if len(courses) == 0 {
-		return fmt.Errorf("海旗未找到课程")
+		return fmt.Errorf("海奇科技未找到匹配课程")
 	}
+	s.logTask(id, "info", fmt.Sprintf("准备执行 %d 门课程", len(courses)))
+	processed := 0
 	for _, course := range courses {
+		if err := s.waitIfPausedOrStopped(id); err != nil {
+			return err
+		}
+		if courseEnded(course.EndDate) {
+			s.logTask(id, "info", fmt.Sprintf("跳过已结束课程: %s (%s)", course.Name, course.EndDate.Format("2006-01-02")))
+			continue
+		}
+		s.logTask(id, "info", "拉取课程节点: "+course.Name)
 		nodes, err := haiqikejiAggregation.HqkjNodeListAction(cache, course)
 		if err != nil {
-			return fmt.Errorf("海旗拉取节点失败: %w", err)
+			return fmt.Errorf("海奇科技拉取节点失败: %w", err)
 		}
+		s.logTask(id, "info", fmt.Sprintf("%s 共 %d 个节点", course.Name, len(nodes)))
 		for _, node := range nodes {
+			if err := s.waitIfPausedOrStopped(id); err != nil {
+				return err
+			}
 			if node.TabVideo != 1 && node.TabVideo != 0 {
 				continue
 			}
+			s.logTask(id, "info", "提交学习进度: "+node.Name)
 			_, err := haiqikejiAggregation.HqkjSubmitFastStudyTimeAction(cache, node)
 			if err != nil {
-				return fmt.Errorf("海旗刷课失败: %w", err)
+				return fmt.Errorf("海奇科技刷课失败: %w", err)
 			}
-			time.Sleep(2 * time.Second)
+			processed++
+			if err := s.interruptibleSleep(id, 2*time.Second); err != nil {
+				return err
+			}
 		}
+	}
+	if processed == 0 {
+		return fmt.Errorf("海奇科技未找到可执行课程或节点")
 	}
 	return nil
 }
 
-func (s *Server) runYinghuaTask(task Task) error {
+func filterHaiqiCourses(courses []haiqikejiAggregation.HqkjCourse, ids []string) []haiqikejiAggregation.HqkjCourse {
+	if len(ids) == 0 {
+		return courses
+	}
+	selected := stringSet(ids)
+	out := make([]haiqikejiAggregation.HqkjCourse, 0, len(courses))
+	for _, course := range courses {
+		if _, ok := selected[course.Id]; ok {
+			out = append(out, course)
+		}
+	}
+	return out
+}
+
+func (s *Server) runYinghuaTask(id string, task Task) error {
+	if err := s.waitIfPausedOrStopped(id); err != nil {
+		return err
+	}
 	cache := &yinghuaApi.YingHuaUserCache{PreUrl: task.PreURL, Account: task.Account, Password: task.Password}
+	s.logTask(id, "info", "英华登录中")
 	if err := yinghuaAggregation.YingHuaLoginAction(cache); err != nil {
 		return fmt.Errorf("英华登录失败: %w", err)
 	}
+	s.logTask(id, "success", "英华登录成功")
 	courses, err := yinghuaAggregation.CourseListAction(cache)
 	if err != nil {
 		return fmt.Errorf("英华拉取课程失败: %w", err)
 	}
+	courses = filterYinghuaCourses(courses, task.CourseIDs)
 	if len(courses) == 0 {
-		return fmt.Errorf("英华未找到课程")
+		return fmt.Errorf("英华未找到匹配课程")
 	}
+	s.logTask(id, "info", fmt.Sprintf("准备执行 %d 门课程", len(courses)))
+	processed := 0
 	for _, course := range courses {
+		if err := s.waitIfPausedOrStopped(id); err != nil {
+			return err
+		}
+		if courseEnded(course.EndDate) {
+			s.logTask(id, "info", fmt.Sprintf("跳过已结束课程: %s (%s)", course.Name, course.EndDate.Format("2006-01-02")))
+			continue
+		}
+		s.logTask(id, "info", "拉取课程节点: "+course.Name)
 		nodes, err := yinghuaAggregation.VideosListAction(cache, course)
 		if err != nil {
 			return fmt.Errorf("英华拉取节点失败: %w", err)
 		}
 		for _, node := range nodes {
+			if err := s.waitIfPausedOrStopped(id); err != nil {
+				return err
+			}
 			if !node.TabVideo {
 				continue
 			}
+			s.logTask(id, "info", "提交学习进度: "+node.Name)
 			_, err := yinghuaAggregation.SubmitStudyTimeAction(cache, node.Id, node.Id, 60)
 			if err != nil {
 				return fmt.Errorf("英华刷课失败: %w", err)
 			}
-			time.Sleep(2 * time.Second)
+			processed++
+			if err := s.interruptibleSleep(id, 2*time.Second); err != nil {
+				return err
+			}
 		}
+	}
+	if processed == 0 {
+		return fmt.Errorf("英华未找到可执行课程或节点")
 	}
 	return nil
 }
 
-func (s *Server) runXueXiTongTask(task Task) error {
+func filterYinghuaCourses(courses []yinghuaAggregation.YingHuaCourse, ids []string) []yinghuaAggregation.YingHuaCourse {
+	if len(ids) == 0 {
+		return courses
+	}
+	selected := stringSet(ids)
+	out := make([]yinghuaAggregation.YingHuaCourse, 0, len(courses))
+	for _, course := range courses {
+		if _, ok := selected[course.Id]; ok {
+			out = append(out, course)
+		}
+	}
+	return out
+}
+
+func (s *Server) runXueXiTongTask(id string, task Task) error {
+	if err := s.waitIfPausedOrStopped(id); err != nil {
+		return err
+	}
 	cache := &xuexitongApi.XueXiTUserCache{Name: task.Account, Password: task.Password}
+	s.logTask(id, "info", "学习通登录中")
 	if err := xuexitongAggregation.XueXiTLoginAction(cache); err != nil {
 		return fmt.Errorf("学习通登录失败: %w", err)
 	}
+	s.logTask(id, "success", "学习通登录成功")
 	courses, err := xuexitongAggregation.XueXiTPullCourseAction(cache)
 	if err != nil {
 		return fmt.Errorf("学习通拉取课程失败: %w", err)
 	}
+	courses = filterXueXiTongCourses(courses, task.CourseIDs)
 	if len(courses) == 0 {
-		return fmt.Errorf("学习通未找到课程")
+		return fmt.Errorf("学习通未找到匹配课程")
 	}
 
 	processed := 0
+	discovered := 0
+	scanErrors := 0
+	unfinishedHints := 0
+	s.logTask(id, "info", fmt.Sprintf("准备执行 %d 门课程", len(courses)))
 	for _, course := range courses {
-		if !course.IsStart {
+		if err := s.waitIfPausedOrStopped(id); err != nil {
+			return err
+		}
+		if course.State == 1 {
+			s.logTask(id, "info", "跳过已结束课程: "+course.CourseName)
 			continue
 		}
+		if !course.IsStart {
+			s.logTask(id, "info", "跳过未开课课程: "+course.CourseName)
+			continue
+		}
+		if course.JobCount > course.JobFinishCount {
+			unfinishedHints++
+		}
+		s.logTask(id, "info", fmt.Sprintf("处理课程: %s (列表进度 %d/%d，仅供参考)", course.CourseName, course.JobFinishCount, course.JobCount))
+
+		classID, err := strconv.Atoi(course.Key)
+		if err != nil {
+			scanErrors++
+			s.logTask(id, "error", fmt.Sprintf("课程 classId 解析失败: %s (%v)", course.CourseName, err))
+			continue
+		}
+		chapter, ok, err := xuexitongAggregation.PullCourseChapterAction(cache, course.Cpi, classID)
+		if err != nil || !ok {
+			scanErrors++
+			s.logTask(id, "error", fmt.Sprintf("无法拉取课程章节: %s (%v)", course.CourseName, err))
+			continue
+		}
+		s.logTask(id, "info", fmt.Sprintf("章节拉取成功: %s，共 %d 个章节", course.CourseName, len(chapter.Knowledge)))
+
+		nodes := make([]int, 0, len(chapter.Knowledge))
+		for _, item := range chapter.Knowledge {
+			nodes = append(nodes, item.ID)
+		}
+		if len(nodes) == 0 {
+			s.logTask(id, "info", "跳过无章节课程: "+course.CourseName)
+			continue
+		}
+		courseID, err := strconv.Atoi(course.CourseID)
+		if err != nil {
+			scanErrors++
+			s.logTask(id, "error", fmt.Sprintf("课程 courseId 解析失败: %s (%v)", course.CourseName, err))
+			continue
+		}
+		userID, err := strconv.Atoi(cache.UserID)
+		if err != nil {
+			userID = 0
+		}
+		pointAction, err := xuexitongAggregation.ChapterFetchPointAction(cache, nodes, &chapter, classID, userID, course.Cpi, courseID)
+		if err != nil {
+			scanErrors++
+			s.logTask(id, "error", fmt.Sprintf("无法拉取章节任务点状态: %s (%v)", course.CourseName, err))
+			continue
+		}
+
+		for index := range pointAction.Knowledge {
+			if err := s.waitIfPausedOrStopped(id); err != nil {
+				return err
+			}
+			if index < 0 || index >= len(nodes) {
+				continue
+			}
+			chapterItem := pointAction.Knowledge[index]
+			chapterName := xueXiTongChapterLabel(chapterItem)
+			if chapterItem.PointTotal > 0 {
+				s.logTask(id, "info", fmt.Sprintf("检查章节: %s (任务点 %d/%d)", chapterName, chapterItem.PointFinished, chapterItem.PointTotal))
+				if chapterItem.PointFinished >= chapterItem.PointTotal {
+					s.logTask(id, "info", "跳过已完成章节: "+chapterName)
+					continue
+				}
+			} else {
+				s.logTask(id, "info", "检查章节: "+chapterName)
+			}
+
+			_, fetchCards, err := xuexitongAggregation.ChapterFetchCardsAction(cache, &chapter, nodes, index, courseID, classID, course.Cpi)
+			if err != nil {
+				scanErrors++
+				s.logTask(id, "error", fmt.Sprintf("章节卡片拉取失败: %s (%v)", chapterName, err))
+				continue
+			}
+			videoDTOs, workDTOs, documentDTOs, hyperlinkDTOs, liveDTOs, _ := xuexitongApi.ParsePointDto(fetchCards)
+			parsed := len(videoDTOs) + len(workDTOs) + len(documentDTOs) + len(hyperlinkDTOs) + len(liveDTOs)
+			if parsed == 0 {
+				s.logTask(id, "info", "章节未解析到可执行卡片: "+chapterName)
+				continue
+			}
+			discovered += parsed
+			s.logTask(id, "info", fmt.Sprintf("解析到卡片: %s，视频/音频 %d，作业 %d，文档 %d，链接 %d，直播 %d", chapterName, len(videoDTOs), len(workDTOs), len(documentDTOs), len(hyperlinkDTOs), len(liveDTOs)))
+
+			for _, videoDTO := range videoDTOs {
+				if err := s.waitIfPausedOrStopped(id); err != nil {
+					return err
+				}
+				videoDTO.Logger = log.New(io.Discard, "", 0)
+				card, enc, err := xuexitongAggregation.PageMobileChapterCardAction(cache, classID, courseID, videoDTO.KnowledgeID, videoDTO.CardIndex, course.Cpi)
+				if err != nil {
+					scanErrors++
+					s.logTask(id, "error", fmt.Sprintf("视频/音频移动卡片拉取失败: %s (%v)", chapterName, err))
+					continue
+				}
+				if _, err := videoDTO.AttachmentsDetection(card); err != nil {
+					scanErrors++
+					s.logTask(id, "error", fmt.Sprintf("视频/音频附件解析失败: %s (%v)", chapterName, err))
+					continue
+				}
+				if !videoDTO.IsJob {
+					s.logTask(id, "info", fmt.Sprintf("跳过非任务点视频/音频: %s (%d)", chapterName, videoDTO.KnowledgeID))
+					continue
+				}
+				videoDTO.Enc = enc
+				s.logTask(id, "info", fmt.Sprintf("开始执行视频/音频任务点: %s (%d)", chapterName, videoDTO.KnowledgeID))
+				xuexitongPoint.ExecuteVideoTest(cache, &videoDTO, classID, course.Cpi)
+				processed++
+				s.logTask(id, "success", fmt.Sprintf("视频/音频任务点完成: %s (%d)", chapterName, videoDTO.KnowledgeID))
+				if err := s.interruptibleSleep(id, 2*time.Second); err != nil {
+					return err
+				}
+			}
+			for _, documentDTO := range documentDTOs {
+				if err := s.waitIfPausedOrStopped(id); err != nil {
+					return err
+				}
+				card, _, err := xuexitongAggregation.PageMobileChapterCardAction(cache, classID, courseID, documentDTO.KnowledgeID, documentDTO.CardIndex, course.Cpi)
+				if err != nil {
+					scanErrors++
+					s.logTask(id, "error", fmt.Sprintf("文档移动卡片拉取失败: %s (%v)", chapterName, err))
+					continue
+				}
+				if _, err := documentDTO.AttachmentsDetection(card); err != nil {
+					scanErrors++
+					s.logTask(id, "error", fmt.Sprintf("文档附件解析失败: %s (%v)", chapterName, err))
+					continue
+				}
+				if !documentDTO.IsJob {
+					s.logTask(id, "info", fmt.Sprintf("跳过非任务点文档: %s (%d)", chapterName, documentDTO.KnowledgeID))
+					continue
+				}
+				if _, err := xuexitongPoint.ExecuteDocument(cache, &documentDTO); err != nil {
+					scanErrors++
+					s.logTask(id, "error", fmt.Sprintf("文档任务点执行失败: %s (%v)", chapterName, err))
+					continue
+				}
+				processed++
+				s.logTask(id, "success", fmt.Sprintf("文档任务点完成: %s (%d)", chapterName, documentDTO.KnowledgeID))
+				if err := s.interruptibleSleep(id, 2*time.Second); err != nil {
+					return err
+				}
+			}
+			for _, workDTO := range workDTOs {
+				if err := s.waitIfPausedOrStopped(id); err != nil {
+					return err
+				}
+				if task.AIURL == "" || task.AIModel == "" {
+					s.logTask(id, "info", fmt.Sprintf("检测到作业任务点但未配置 AI，跳过: %s (%d)", chapterName, workDTO.KnowledgeID))
+					continue
+				}
+				mobileCard, _, err := xuexitongAggregation.PageMobileChapterCardAction(cache, classID, courseID, workDTO.KnowledgeID, workDTO.CardIndex, course.Cpi)
+				if err != nil {
+					scanErrors++
+					s.logTask(id, "error", fmt.Sprintf("作业移动卡片拉取失败: %s (%v)", chapterName, err))
+					continue
+				}
+				isJob, err := workDTO.AttachmentsDetection(mobileCard)
+				if err != nil {
+					scanErrors++
+					s.logTask(id, "error", fmt.Sprintf("作业附件解析失败: %s (%v)", chapterName, err))
+					continue
+				}
+				workDTO.IsJob = isJob
+				if !workDTO.IsJob {
+					s.logTask(id, "info", fmt.Sprintf("跳过非任务点作业: %s (%d)", chapterName, workDTO.KnowledgeID))
+					continue
+				}
+				questionAction, err := xuexitongAggregation.ParseWorkQuestionAction(cache, &workDTO)
+				if err != nil {
+					scanErrors++
+					s.logTask(id, "error", fmt.Sprintf("作业题目解析失败: %s (%v)", chapterName, err))
+					continue
+				}
+				for i := range questionAction.Choice {
+					q := &questionAction.Choice[i]
+					message := xuexitongAggregation.AIProblemMessage(questionAction.Title, q.Text, xuexitongApi.ExamTurn{XueXChoiceQue: *q})
+					q.AnswerAIGet(cache.UserID, task.AIURL, task.AIModel, ctype.AiType(task.AIType), message, task.AIKey)
+				}
+				for i := range questionAction.Judge {
+					q := &questionAction.Judge[i]
+					message := xuexitongAggregation.AIProblemMessage(q.Type.String(), q.Text, xuexitongApi.ExamTurn{XueXJudgeQue: *q})
+					q.AnswerAIGet(cache.UserID, task.AIURL, task.AIModel, ctype.AiType(task.AIType), message, task.AIKey)
+				}
+				for i := range questionAction.Fill {
+					q := &questionAction.Fill[i]
+					message := xuexitongAggregation.AIProblemMessage(q.Type.String(), q.Text, xuexitongApi.ExamTurn{XueXFillQue: *q})
+					q.AnswerAIGet(cache.UserID, task.AIURL, task.AIModel, ctype.AiType(task.AIType), message, task.AIKey)
+				}
+				for i := range questionAction.Short {
+					q := &questionAction.Short[i]
+					message := xuexitongAggregation.AIProblemMessage(q.Type.String(), q.Text, xuexitongApi.ExamTurn{XueXShortQue: *q})
+					q.AnswerAIGet(cache.UserID, task.AIURL, task.AIModel, ctype.AiType(task.AIType), message, task.AIKey)
+				}
+				for i := range questionAction.TermExplanation {
+					q := &questionAction.TermExplanation[i]
+					message := xuexitongAggregation.AIProblemMessage(q.Type.String(), q.Text, xuexitongApi.ExamTurn{XueXTermExplanationQue: *q})
+					q.AnswerAIGet(cache.UserID, task.AIURL, task.AIModel, ctype.AiType(task.AIType), message, task.AIKey)
+				}
+				for i := range questionAction.Essay {
+					q := &questionAction.Essay[i]
+					message := xuexitongAggregation.AIProblemMessage(q.Type.String(), q.Text, xuexitongApi.ExamTurn{XueXEssayQue: *q})
+					q.AnswerAIGet(cache.UserID, task.AIURL, task.AIModel, ctype.AiType(task.AIType), message, task.AIKey)
+				}
+				if _, err := xuexitongAggregation.WorkNewSubmitAnswerAction(cache, questionAction, true); err != nil {
+					scanErrors++
+					s.logTask(id, "error", fmt.Sprintf("作业答案提交失败: %s (%v)", chapterName, err))
+					continue
+				}
+				processed++
+				s.logTask(id, "success", fmt.Sprintf("作业任务点完成: %s (%d)", chapterName, workDTO.KnowledgeID))
+				if err := s.interruptibleSleep(id, 2*time.Second); err != nil {
+					return err
+				}
+			}
+			for _, hyperlinkDTO := range hyperlinkDTOs {
+				if err := s.waitIfPausedOrStopped(id); err != nil {
+					return err
+				}
+				if !hyperlinkDTO.IsSet {
+					continue
+				}
+				if _, err := xuexitongPoint.ExecuteHyperlink(cache, &hyperlinkDTO); err != nil {
+					scanErrors++
+					s.logTask(id, "error", fmt.Sprintf("链接任务点执行失败: %s (%v)", chapterName, err))
+					continue
+				}
+				processed++
+				s.logTask(id, "success", fmt.Sprintf("链接任务点完成: %s (%d)", chapterName, hyperlinkDTO.KnowledgeID))
+				if err := s.interruptibleSleep(id, 2*time.Second); err != nil {
+					return err
+				}
+			}
+			for _, liveDTO := range liveDTOs {
+				if err := s.waitIfPausedOrStopped(id); err != nil {
+					return err
+				}
+				if !liveDTO.IsSet {
+					continue
+				}
+				if _, err := xuexitongPoint.ExecuteLive(cache, &liveDTO); err != nil {
+					scanErrors++
+					s.logTask(id, "error", fmt.Sprintf("直播任务点执行失败: %s (%v)", chapterName, err))
+					continue
+				}
+				processed++
+				s.logTask(id, "success", fmt.Sprintf("直播任务点完成: %s (%d)", chapterName, liveDTO.KnowledgeID))
+				if err := s.interruptibleSleep(id, 2*time.Second); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	if processed == 0 {
+		switch {
+		case discovered > 0:
+			return fmt.Errorf("学习通解析到 %d 个卡片，但没有成功执行任务点，请查看上方失败或跳过日志", discovered)
+		case scanErrors > 0:
+			return fmt.Errorf("学习通扫描任务点失败 %d 次，请查看章节/卡片日志", scanErrors)
+		case unfinishedHints > 0:
+			return fmt.Errorf("课程列表显示仍有未完成任务点，但章节卡片未解析到可执行项，请查看实时日志")
+		default:
+			s.logTask(id, "info", "没有需要执行的学习通任务点，课程可能已完成、已结束或没有未完成任务")
+			return nil
+		}
+	}
+	s.logTask(id, "success", fmt.Sprintf("学习通已执行 %d 个任务点", processed))
+	return nil
+}
+
+func (s *Server) runXueXiTongTaskLegacy(id string, task Task) error {
+	if err := s.waitIfPausedOrStopped(id); err != nil {
+		return err
+	}
+	cache := &xuexitongApi.XueXiTUserCache{Name: task.Account, Password: task.Password}
+	s.logTask(id, "info", "学习通登录中")
+	if err := xuexitongAggregation.XueXiTLoginAction(cache); err != nil {
+		return fmt.Errorf("学习通登录失败: %w", err)
+	}
+	s.logTask(id, "success", "学习通登录成功")
+	courses, err := xuexitongAggregation.XueXiTPullCourseAction(cache)
+	if err != nil {
+		return fmt.Errorf("学习通拉取课程失败: %w", err)
+	}
+	courses = filterXueXiTongCourses(courses, task.CourseIDs)
+	if len(courses) == 0 {
+		return fmt.Errorf("学习通未找到匹配课程")
+	}
+
+	processed := 0
+	s.logTask(id, "info", fmt.Sprintf("准备执行 %d 门课程", len(courses)))
+	for _, course := range courses {
+		if err := s.waitIfPausedOrStopped(id); err != nil {
+			return err
+		}
+		if course.State == 1 {
+			s.logTask(id, "info", "跳过已结束课程: "+course.CourseName)
+			continue
+		}
+		if !course.IsStart {
+			s.logTask(id, "info", "跳过未开课课程: "+course.CourseName)
+			continue
+		}
+		s.logTask(id, "info", fmt.Sprintf("处理课程: %s (列表进度 %d/%d，仅供参考)", course.CourseName, course.JobFinishCount, course.JobCount))
 		classID, err := strconv.Atoi(course.Key)
 		if err != nil {
 			continue
 		}
 		chapter, ok, err := xuexitongAggregation.PullCourseChapterAction(cache, course.Cpi, classID)
 		if err != nil || !ok {
+			s.logTask(id, "info", "跳过无法拉取章节的课程: "+course.CourseName)
 			continue
 		}
 		var nodes []int
 		for _, item := range chapter.Knowledge {
 			nodes = append(nodes, item.ID)
+		}
+		if len(nodes) == 0 {
+			s.logTask(id, "info", "跳过无章节任务点的课程: "+course.CourseName)
+			continue
 		}
 		courseID, err := strconv.Atoi(course.CourseID)
 		if err != nil {
@@ -267,9 +1012,13 @@ func (s *Server) runXueXiTongTask(task Task) error {
 		}
 		pointAction, err := xuexitongAggregation.ChapterFetchPointAction(cache, nodes, &chapter, classID, userID, course.Cpi, courseID)
 		if err != nil {
+			s.logTask(id, "info", "跳过无法拉取任务点状态的课程: "+course.CourseName)
 			continue
 		}
 		for index := range pointAction.Knowledge {
+			if err := s.waitIfPausedOrStopped(id); err != nil {
+				return err
+			}
 			if index < 0 || index >= len(nodes) {
 				continue
 			}
@@ -282,6 +1031,9 @@ func (s *Server) runXueXiTongTask(task Task) error {
 				continue
 			}
 			for _, videoDTO := range videoDTOs {
+				if err := s.waitIfPausedOrStopped(id); err != nil {
+					return err
+				}
 				if !videoDTO.IsJob {
 					continue
 				}
@@ -293,9 +1045,15 @@ func (s *Server) runXueXiTongTask(task Task) error {
 				videoDTO.Enc = enc
 				xuexitongPoint.ExecuteVideoTest(cache, &videoDTO, classID, course.Cpi)
 				processed++
-				time.Sleep(2 * time.Second)
+				s.logTask(id, "info", fmt.Sprintf("视频任务点完成: %d", videoDTO.KnowledgeID))
+				if err := s.interruptibleSleep(id, 2*time.Second); err != nil {
+					return err
+				}
 			}
 			for _, documentDTO := range documentDTOs {
+				if err := s.waitIfPausedOrStopped(id); err != nil {
+					return err
+				}
 				if !documentDTO.IsJob {
 					continue
 				}
@@ -308,10 +1066,16 @@ func (s *Server) runXueXiTongTask(task Task) error {
 					continue
 				}
 				processed++
-				time.Sleep(2 * time.Second)
+				s.logTask(id, "info", fmt.Sprintf("文档任务点完成: %d", documentDTO.KnowledgeID))
+				if err := s.interruptibleSleep(id, 2*time.Second); err != nil {
+					return err
+				}
 			}
 			if task.AIURL != "" && task.AIModel != "" {
 				for _, workDTO := range workDTOs {
+					if err := s.waitIfPausedOrStopped(id); err != nil {
+						return err
+					}
 					if !workDTO.IsJob {
 						continue
 					}
@@ -356,10 +1120,16 @@ func (s *Server) runXueXiTongTask(task Task) error {
 					}
 					_, _ = xuexitongAggregation.WorkNewSubmitAnswerAction(cache, questionAction, true)
 					processed++
-					time.Sleep(2 * time.Second)
+					s.logTask(id, "info", fmt.Sprintf("作业任务点完成: %d", workDTO.KnowledgeID))
+					if err := s.interruptibleSleep(id, 2*time.Second); err != nil {
+						return err
+					}
 				}
 			}
 			for _, hyperlinkDTO := range hyperlinkDTOs {
+				if err := s.waitIfPausedOrStopped(id); err != nil {
+					return err
+				}
 				if !hyperlinkDTO.IsSet {
 					continue
 				}
@@ -367,9 +1137,15 @@ func (s *Server) runXueXiTongTask(task Task) error {
 					continue
 				}
 				processed++
-				time.Sleep(2 * time.Second)
+				s.logTask(id, "info", fmt.Sprintf("链接任务点完成: %d", hyperlinkDTO.KnowledgeID))
+				if err := s.interruptibleSleep(id, 2*time.Second); err != nil {
+					return err
+				}
 			}
 			for _, liveDTO := range liveDTOs {
+				if err := s.waitIfPausedOrStopped(id); err != nil {
+					return err
+				}
 				if !liveDTO.IsSet {
 					continue
 				}
@@ -377,14 +1153,48 @@ func (s *Server) runXueXiTongTask(task Task) error {
 					continue
 				}
 				processed++
-				time.Sleep(2 * time.Second)
+				s.logTask(id, "info", fmt.Sprintf("直播任务点完成: %d", liveDTO.KnowledgeID))
+				if err := s.interruptibleSleep(id, 2*time.Second); err != nil {
+					return err
+				}
 			}
 		}
 	}
 	if processed == 0 {
-		return fmt.Errorf("学习通未找到可执行任务点")
+		s.logTask(id, "info", "没有需要执行的学习通任务点，可能课程已完成、已结束或没有未完成任务")
+		return nil
 	}
 	return nil
+}
+
+func filterXueXiTongCourses(courses []xuexitongAggregation.XueXiTCourse, ids []string) []xuexitongAggregation.XueXiTCourse {
+	if len(ids) == 0 {
+		return courses
+	}
+	selected := stringSet(ids)
+	out := make([]xuexitongAggregation.XueXiTCourse, 0, len(courses))
+	for _, course := range courses {
+		if _, ok := selected[course.CourseID]; ok {
+			out = append(out, course)
+		}
+	}
+	return out
+}
+
+func xueXiTongChapterLabel(item xuexitongAggregation.KnowledgeItem) string {
+	parts := nonEmptyStrings(item.Label, item.Name)
+	if len(parts) == 0 {
+		return fmt.Sprintf("章节 %d", item.ID)
+	}
+	return strings.Join(parts, " ")
+}
+
+func stringSet(values []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		set[value] = struct{}{}
+	}
+	return set
 }
 
 func countXueXiTongTaskPoints(videoDTOs []xuexitongApi.PointVideoDto, documentDTOs []xuexitongApi.PointDocumentDto, hyperlinkDTOs []xuexitongApi.PointHyperlinkDto, liveDTOs []xuexitongApi.PointLiveDto) int {

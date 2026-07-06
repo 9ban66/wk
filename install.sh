@@ -17,6 +17,16 @@ command_exists() {
   command -v "$1" >/dev/null 2>&1
 }
 
+run_as_root() {
+  if [ "$(id -u)" -eq 0 ]; then
+    "$@"
+  elif command_exists sudo; then
+    sudo "$@"
+  else
+    fail "需要 root 权限，请使用 root 运行或先安装 sudo"
+  fi
+}
+
 fail() {
   echo "错误: $*" >&2
   exit 1
@@ -25,14 +35,16 @@ fail() {
 install_base_packages() {
   if command_exists apt-get; then
     export DEBIAN_FRONTEND=noninteractive
-    sudo apt-get update
-    sudo apt-get install -y curl wget git ca-certificates
+    run_as_root apt-get update
+    run_as_root apt-get install -y curl wget git ca-certificates gcc g++ make
+  elif command_exists dnf; then
+    run_as_root dnf install -y curl wget git ca-certificates gcc gcc-c++ make
   elif command_exists yum; then
-    sudo yum install -y curl wget git ca-certificates
+    run_as_root yum install -y curl wget git ca-certificates gcc gcc-c++ make
   elif command_exists apk; then
-    sudo apk add --no-cache curl wget git ca-certificates
+    run_as_root apk add --no-cache curl wget git ca-certificates gcc g++ make musl-dev
   else
-    fail "当前系统不支持自动安装依赖，请手动安装 curl wget git ca-certificates"
+    fail "当前系统不支持自动安装依赖，请手动安装 curl wget git ca-certificates gcc make"
   fi
 }
 
@@ -43,11 +55,13 @@ install_go() {
 
   if command_exists apt-get; then
     export DEBIAN_FRONTEND=noninteractive
-    sudo apt-get install -y golang-go
+    run_as_root apt-get install -y golang-go
+  elif command_exists dnf; then
+    run_as_root dnf install -y golang
   elif command_exists yum; then
-    sudo yum install -y golang
+    run_as_root yum install -y golang
   elif command_exists apk; then
-    sudo apk add --no-cache go
+    run_as_root apk add --no-cache go
   else
     fail "无法安装 Go，请手动安装 Go 1.24+"
   fi
@@ -78,7 +92,7 @@ build_binary() {
   fi
 
   echo "正在构建 $APP_NAME..."
-  GOOS=linux GOARCH=amd64 go build -o "$REPO_DIR/$APP_NAME" .
+  CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -o "$REPO_DIR/$APP_NAME" .
 }
 
 start_service() {
