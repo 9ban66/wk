@@ -62,9 +62,9 @@ ensure_repo() {
     echo "更新仓库: $REPO_DIR"
     cd "$REPO_DIR"
     git remote set-url origin "$REPO_URL" 2>/dev/null || true
-    git fetch --depth 1 origin "$BRANCH" || true
-    git checkout "$BRANCH" || true
-    git pull --ff-only origin "$BRANCH" || true
+    git fetch --depth 1 origin "$BRANCH"
+    git checkout -B "$BRANCH" "origin/$BRANCH"
+    git reset --hard "origin/$BRANCH"
   else
     echo "克隆仓库到: $REPO_DIR"
     git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$REPO_DIR"
