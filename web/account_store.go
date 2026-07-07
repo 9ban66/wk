@@ -17,6 +17,7 @@ var (
 	errBadCredentials     = errors.New("用户名或密码错误")
 	errUserDisabled       = errors.New("用户已禁用")
 	errLicenseUnavailable = errors.New("卡密不存在或已禁用")
+	errLicenseExhausted   = errors.New("卡密次数已用完")
 )
 
 type User struct {
@@ -47,6 +48,8 @@ type LicenseKey struct {
 	UsedBy    string     `json:"usedBy,omitempty"`
 	UsedAt    *time.Time `json:"usedAt,omitempty"`
 	Uses      int        `json:"uses"`
+	MaxUses   int        `json:"maxUses"`
+	Remaining int        `json:"remaining"`
 }
 
 type AppStats struct {
@@ -74,7 +77,7 @@ func newAccountStore() *accountStore {
 		sessions:   make(map[string]string),
 		licenses:   make(map[string]*LicenseKey),
 	}
-	store.addLicenseLocked(LicenseKey{Key: "YATORI-DEMO", Note: "默认测试卡密", Active: true})
+	store.addLicenseLocked(LicenseKey{Key: "YATORI-DEMO", Note: "默认测试卡密", Active: true, MaxUses: 0})
 	return store
 }
 
@@ -243,8 +246,8 @@ func (s *accountStore) addLicenseLocked(key LicenseKey) (LicenseKey, error) {
 	if key.CreatedAt.IsZero() {
 		key.CreatedAt = time.Now()
 	}
-	if !key.Active && key.Note == "" {
-		key.Active = true
+	if key.MaxUses < 0 {
+		key.MaxUses = 0
 	}
 	item := key
 	s.licenses[item.Key] = &item
@@ -256,7 +259,7 @@ func (s *accountStore) listLicenses() []LicenseKey {
 	defer s.mu.Unlock()
 	out := make([]LicenseKey, 0, len(s.licenses))
 	for _, item := range s.licenses {
-		out = append(out, *item)
+		out = append(out, summarizeLicense(*item))
 	}
 	return out
 }
@@ -269,21 +272,27 @@ func (s *accountStore) verifyLicense(userID, key string) (LicenseKey, error) {
 	if !ok || !item.Active {
 		return LicenseKey{}, errLicenseUnavailable
 	}
+	if item.MaxUses > 0 && item.Uses >= item.MaxUses {
+		return LicenseKey{}, errLicenseExhausted
+	}
+	return summarizeLicense(*item), nil
+}
+
+func (s *accountStore) consumeLicense(userID, key string) (LicenseKey, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	item, ok := s.licenses[strings.TrimSpace(key)]
+	if !ok || !item.Active {
+		return LicenseKey{}, errLicenseUnavailable
+	}
+	if item.MaxUses > 0 && item.Uses >= item.MaxUses {
+		return LicenseKey{}, errLicenseExhausted
+	}
 	now := time.Now()
 	item.UsedBy = userID
 	item.UsedAt = &now
-	return *item, nil
-}
-
-func (s *accountStore) touchLicenseUse(userID, key string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if item, ok := s.licenses[strings.TrimSpace(key)]; ok && item.Active {
-		now := time.Now()
-		item.UsedBy = userID
-		item.UsedAt = &now
-		item.Uses++
-	}
+	item.Uses++
+	return summarizeLicense(*item), nil
 }
 
 func (s *accountStore) deleteLicense(key string) bool {
@@ -321,6 +330,18 @@ func summarizeUser(user User) UserSummary {
 		Disabled:  user.Disabled,
 		RunCount:  user.RunCount,
 	}
+}
+
+func summarizeLicense(key LicenseKey) LicenseKey {
+	if key.MaxUses > 0 {
+		key.Remaining = key.MaxUses - key.Uses
+		if key.Remaining < 0 {
+			key.Remaining = 0
+		}
+	} else {
+		key.Remaining = -1
+	}
+	return key
 }
 
 func hashPassword(password, salt string) string {

@@ -24,6 +24,9 @@ input:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(37,99,235,.13)
 .topbar{height:58px;display:flex;align-items:center;justify-content:space-between;padding:0 22px;background:#fff;border-bottom:1px solid var(--line)}
 .brand{font-size:17px;font-weight:760}
 .summary{font-size:13px;color:var(--muted)}
+.nav{display:flex;gap:8px;padding:10px 14px;background:#fff;border-bottom:1px solid var(--line);overflow:auto}
+.nav a{white-space:nowrap;text-decoration:none;color:#334155;background:#eef2f7;border-radius:7px;padding:8px 12px;font-size:13px;font-weight:720}
+.nav a.active{background:var(--primary);color:#fff}
 .layout{display:grid;grid-template-columns:minmax(760px,1fr) 390px;gap:14px;padding:14px;max-width:1500px;margin:0 auto}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden}
 .panel-head{min-height:48px;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 14px;border-bottom:1px solid var(--line);font-weight:720}
@@ -61,6 +64,8 @@ tr.active{background:#eef5ff}
 .stat strong{display:block;font-size:20px;margin-bottom:3px}
 .mini-form{display:grid;grid-template-columns:repeat(4,minmax(120px,1fr)) auto;gap:8px;padding:12px 14px;border-bottom:1px solid var(--line)}
 .mini-form.logs{grid-template-columns:repeat(3,minmax(120px,1fr)) auto}
+.delete-form{display:grid;gap:12px;padding:14px}
+.task-select{width:100%;min-height:360px;border:1px solid var(--line);border-radius:8px;padding:8px;font:13px Consolas,"Cascadia Mono",monospace}
 .subgrid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 .mini-table{max-height:260px;overflow:auto}
 .mini-table tr{cursor:default}
@@ -74,6 +79,7 @@ tr.active{background:#eef5ff}
 @media (max-width:680px){
   body{background:#fff}
   .topbar{height:auto;min-height:56px;align-items:flex-start;gap:8px;padding:10px 12px;flex-direction:column}
+  .nav{padding:8px}
   .brand{font-size:16px}.summary{line-height:1.4}
   .layout{padding:8px;gap:10px}
   .panel{border-radius:8px}
@@ -111,7 +117,14 @@ tr.active{background:#eef5ff}
     <button class="btn" id="logoutBtn">退出</button>
   </div>
 </header>
+<nav class="nav">
+  <a href="/admin" class="{{if eq .Page "tasks"}}active{{end}}">任务</a>
+  <a href="/admin/users-page" class="{{if eq .Page "users"}}active{{end}}">用户</a>
+  <a href="/admin/licenses-page" class="{{if eq .Page "licenses"}}active{{end}}">卡密</a>
+  <a href="/admin/delete-tasks" class="{{if eq .Page "delete"}}active{{end}}">删除任务</a>
+</nav>
 <main class="layout">
+  {{if eq .Page "tasks"}}
   <section class="panel">
     <div class="panel-head">
       <span>任务列表</span>
@@ -142,7 +155,7 @@ tr.active{background:#eef5ff}
         <button class="btn primary" id="startBtn" disabled>启动</button>
         <button class="btn" id="pauseBtn" disabled>暂停</button>
         <button class="btn danger" id="stopBtn" disabled>停止</button>
-        <button class="btn danger" id="clearLogsBtn" disabled>删除日志</button>
+        <button class="btn danger" id="clearLogsBtn" disabled>删除任务</button>
       </div>
     </div>
     <div class="detail" id="detail">
@@ -150,64 +163,85 @@ tr.active{background:#eef5ff}
     </div>
     <div class="log-box" id="logs"><div class="log-line">等待任务日志...</div></div>
   </aside>
+  {{end}}
+  {{if eq .Page "users"}}
   <section class="panel ops-panel">
     <div class="panel-head">
-      <span>用户与卡密</span>
+      <span>用户管理</span>
       <div class="tools"><button class="btn" id="refreshOps">刷新</button></div>
     </div>
     <div class="ops">
       <div class="stats" id="stats"></div>
-      <div class="subgrid">
-        <div class="panel">
-          <div class="panel-head"><span>用户列表</span></div>
-          <form class="mini-form" id="userForm">
-            <input id="userId" type="hidden">
-            <input id="userName" placeholder="用户名">
-            <input id="userPassword" type="password" placeholder="密码/留空不改">
-            <input id="userCreatedAt" placeholder="注册时间 2006-01-02">
-            <select id="userDisabled"><option value="false">启用</option><option value="true">禁用</option></select>
-            <button class="btn primary" type="submit">保存</button>
-          </form>
-          <div class="mini-table">
-            <table>
-              <thead><tr><th>用户名</th><th>注册时间</th><th>运行次数</th><th>状态</th><th>操作</th></tr></thead>
-              <tbody id="users"><tr><td colspan="5" class="muted">加载中</td></tr></tbody>
-            </table>
-          </div>
-        </div>
-        <div class="panel">
-          <div class="panel-head"><span>卡密</span></div>
-          <form class="mini-form" id="licenseForm">
-            <input id="licenseKey" placeholder="留空自动生成">
-            <input id="licenseNote" placeholder="备注">
-            <select id="licenseActive"><option value="true">启用</option><option value="false">禁用</option></select>
-            <span></span>
-            <button class="btn primary" type="submit">新增</button>
-          </form>
-          <div class="mini-table">
-            <table>
-              <thead><tr><th>卡密</th><th>备注</th><th>使用次数</th><th>最近用户</th><th>操作</th></tr></thead>
-              <tbody id="licenses"><tr><td colspan="5" class="muted">加载中</td></tr></tbody>
-            </table>
-          </div>
-        </div>
-      </div>
       <div class="panel">
-        <div class="panel-head"><span>自定义删除日志</span></div>
-        <form class="mini-form logs" id="logsForm">
-          <input id="logPlatform" placeholder="平台，可空">
-          <input id="logAccount" placeholder="账号，可空">
-          <input id="logBefore" placeholder="删除早于 2006-01-02，可空">
-          <button class="btn danger" type="submit">删除匹配日志</button>
+        <div class="panel-head"><span>用户列表</span></div>
+        <form class="mini-form" id="userForm">
+          <input id="userId" type="hidden">
+          <input id="userName" placeholder="用户名">
+          <input id="userPassword" type="password" placeholder="密码/留空不改">
+          <input id="userCreatedAt" placeholder="注册时间 2006-01-02">
+          <select id="userDisabled"><option value="false">启用</option><option value="true">禁用</option></select>
+          <button class="btn primary" type="submit">保存</button>
         </form>
+        <div class="mini-table">
+          <table>
+            <thead><tr><th>用户名</th><th>注册时间</th><th>运行次数</th><th>状态</th><th>操作</th></tr></thead>
+            <tbody id="users"><tr><td colspan="5" class="muted">加载中</td></tr></tbody>
+          </table>
+        </div>
       </div>
     </div>
   </section>
+  {{end}}
+  {{if eq .Page "licenses"}}
+  <section class="panel ops-panel">
+    <div class="panel-head">
+      <span>卡密管理</span>
+      <div class="tools"><button class="btn" id="refreshOps">刷新</button></div>
+    </div>
+    <div class="ops">
+      <div class="panel">
+        <div class="panel-head"><span>卡密</span></div>
+        <form class="mini-form" id="licenseForm">
+          <input id="licenseKey" placeholder="留空自动生成">
+          <input id="licenseNote" placeholder="备注">
+          <input id="licenseMaxUses" type="number" min="0" value="1" placeholder="可用次数，0不限">
+          <select id="licenseActive"><option value="true">启用</option><option value="false">禁用</option></select>
+          <button class="btn primary" type="submit">新增</button>
+        </form>
+        <div class="mini-table">
+          <table>
+            <thead><tr><th>卡密</th><th>备注</th><th>次数</th><th>最近用户</th><th>操作</th></tr></thead>
+            <tbody id="licenses"><tr><td colspan="5" class="muted">加载中</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+  {{end}}
+  {{if eq .Page "delete"}}
+  <section class="panel ops-panel">
+    <div class="panel-head">
+      <span>删除任务记录</span>
+      <div class="tools"><button class="btn" id="refreshDeleteTasks">刷新</button></div>
+    </div>
+    <form class="delete-form" id="deleteTaskForm">
+      <select id="deleteTaskSelect" class="task-select" size="14"></select>
+      <button class="btn danger" type="submit">删除选中的整条任务</button>
+      <div class="muted">这里删除的是任务记录本身，包括状态和日志，不只是清空日志。</div>
+    </form>
+  </section>
+  {{end}}
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
+const page = "{{.Page}}";
 const state = {tasks:[], selected:"", events:null};
 const statusText = {queued:"排队中",running:"运行中",paused:"已暂停",stopped:"已停止",succeeded:"已完成",failed:"失败"};
+
+function on(id, eventName, handler){
+  const el = $(id);
+  if(el) el.addEventListener(eventName, handler);
+}
 
 function escapeHTML(value){
   return String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
@@ -242,6 +276,7 @@ async function postJSON(url, data){
 
 function renderTasks(){
   const body = $("tasks");
+  if(!body) return;
   if(!state.tasks.length){
     body.innerHTML = '<tr><td colspan="8" class="muted">暂无任务</td></tr>';
     return;
@@ -261,6 +296,7 @@ function renderTasks(){
 }
 
 function renderDetail(task){
+  if(!$("detail")) return;
   if(!task){
     $("detail").innerHTML = '<div class="muted">选择一个任务查看日志</div>';
     setButtons(null);
@@ -275,6 +311,7 @@ function renderDetail(task){
 }
 
 function setButtons(task){
+  if(!$("startBtn")) return;
   $("startBtn").disabled = !task || !(task.status === "queued" || task.status === "paused");
   $("pauseBtn").disabled = !task || task.status !== "running";
   $("stopBtn").disabled = !task || ["succeeded","failed","stopped"].includes(task.status);
@@ -283,6 +320,7 @@ function setButtons(task){
 
 function appendLog(log){
   const box = $("logs");
+  if(!box) return;
   const at = log.at ? new Date(log.at).toLocaleTimeString() : new Date().toLocaleTimeString();
   const level = escapeHTML(log.level || "info");
   const line = document.createElement("div");
@@ -303,10 +341,10 @@ async function loadTasks(){
   state.tasks = await res.json();
   hideLogin();
   renderTasks();
+  renderDeleteTaskOptions();
   const running = state.tasks.filter(t => t.status === "running").length;
-  $("summary").textContent = "任务 " + state.tasks.length + " 个，运行中 " + running + " 个";
+  if($("summary")) $("summary").textContent = "任务 " + state.tasks.length + " 个，运行中 " + running + " 个";
   renderDetail(state.tasks.find(t => t.id === state.selected));
-  loadOps();
 }
 
 async function loadOps(){
@@ -320,12 +358,13 @@ async function loadOps(){
     return;
   }
   if(!statsRes.ok || !usersRes.ok || !licensesRes.ok) return;
-  renderStats(await statsRes.json());
-  renderUsers(await usersRes.json());
-  renderLicenses(await licensesRes.json());
+  if($("stats")) renderStats(await statsRes.json());
+  if($("users")) renderUsers(await usersRes.json());
+  if($("licenses")) renderLicenses(await licensesRes.json());
 }
 
 function renderStats(stats){
+  if(!$("stats")) return;
   $("stats").innerHTML =
     '<div class="stat"><strong>' + escapeHTML(stats.userCount || 0) + '</strong><span class="muted">用户数量</span></div>' +
     '<div class="stat"><strong>' + escapeHTML(stats.runCount || 0) + '</strong><span class="muted">运行次数</span></div>' +
@@ -335,6 +374,7 @@ function renderStats(stats){
 }
 
 function renderUsers(users){
+  if(!$("users")) return;
   if(!users.length){
     $("users").innerHTML = '<tr><td colspan="5" class="muted">暂无用户</td></tr>';
     return;
@@ -364,6 +404,7 @@ function renderUsers(users){
 }
 
 function renderLicenses(items){
+  if(!$("licenses")) return;
   if(!items.length){
     $("licenses").innerHTML = '<tr><td colspan="5" class="muted">暂无卡密</td></tr>';
     return;
@@ -372,7 +413,7 @@ function renderLicenses(items){
     '<tr>' +
       '<td data-label="卡密" class="password">' + escapeHTML(item.key) + '<br>' + (item.active ? '<span class="status succeeded">启用</span>' : '<span class="status failed">禁用</span>') + '</td>' +
       '<td data-label="备注">' + escapeHTML(item.note || "-") + '</td>' +
-      '<td data-label="使用次数">' + escapeHTML(item.uses || 0) + '</td>' +
+      '<td data-label="次数">' + escapeHTML((item.uses || 0) + "/" + (item.maxUses > 0 ? item.maxUses : "不限") + "，剩余 " + (item.remaining >= 0 ? item.remaining : "不限")) + '</td>' +
       '<td data-label="最近用户">' + escapeHTML(item.usedBy || "-") + '</td>' +
       '<td data-label="操作"><button class="btn mini danger" data-delete-license="' + escapeHTML(item.key) + '">删除</button></td>' +
     '</tr>').join("");
@@ -383,7 +424,21 @@ function renderLicenses(items){
   }));
 }
 
+function renderDeleteTaskOptions(){
+  const box = $("deleteTaskSelect");
+  if(!box) return;
+  if(!state.tasks.length){
+    box.innerHTML = '<option value="">暂无任务</option>';
+    return;
+  }
+  box.innerHTML = state.tasks.slice().reverse().map(t => {
+    const text = [t.id, t.platform, t.account, statusText[t.status] || t.status, formatTime(t.createdAt), t.message || ""].filter(Boolean).join(" | ");
+    return '<option value="' + escapeHTML(t.id) + '">' + escapeHTML(text) + '</option>';
+  }).join("");
+}
+
 async function selectTask(id){
+  if(!$("tasks")) return;
   state.selected = id;
   renderTasks();
   if(state.events){ state.events.close(); state.events = null; }
@@ -423,14 +478,15 @@ function hideLogin(){
 
 async function clearLogs(){
   if(!state.selected) return;
-  if(!confirm("确定删除所选任务的日志吗？")) return;
+  if(!confirm("确定删除所选整条任务记录吗？")) return;
   try{
-    const res = await fetch("/admin/tasks/" + encodeURIComponent(state.selected) + "/logs", {method:"DELETE"});
+    const res = await fetch("/admin/tasks/" + encodeURIComponent(state.selected), {method:"DELETE"});
     const text = await res.text();
     if(!res.ok) throw new Error(text || res.statusText);
     if(state.events){ state.events.close(); state.events = null; }
-    $("logs").innerHTML = '<div class="log-line">日志已删除</div>';
+    $("logs").innerHTML = '<div class="log-line">任务已删除</div>';
     $("logs").dataset.empty = "true";
+    state.selected = "";
     await loadTasks();
   }catch(err){
     alert(err.message);
@@ -442,8 +498,7 @@ async function login(key){
   const text = await res.text();
   if(!res.ok) throw new Error(text || res.statusText);
   hideLogin();
-  await loadTasks();
-  await loadOps();
+  await loadCurrentPage();
 }
 
 async function logout(){
@@ -455,7 +510,17 @@ async function logout(){
   showLogin();
 }
 
-$("loginForm").addEventListener("submit", async (event) => {
+async function loadCurrentPage(){
+  if(page === "tasks" || page === "delete"){
+    await loadTasks();
+    return;
+  }
+  if(page === "users" || page === "licenses"){
+    await loadOps();
+  }
+}
+
+on("loginForm", "submit", async (event) => {
   event.preventDefault();
   try{
     await login($("adminKey").value);
@@ -463,14 +528,15 @@ $("loginForm").addEventListener("submit", async (event) => {
     $("authError").textContent = err.message;
   }
 });
-$("refresh").addEventListener("click", loadTasks);
-$("startBtn").addEventListener("click", () => control("resume"));
-$("pauseBtn").addEventListener("click", () => control("pause"));
-$("stopBtn").addEventListener("click", () => control("stop"));
-$("clearLogsBtn").addEventListener("click", clearLogs);
-$("logoutBtn").addEventListener("click", logout);
-$("refreshOps").addEventListener("click", loadOps);
-$("userForm").addEventListener("submit", async (event) => {
+on("refresh", "click", loadTasks);
+on("refreshDeleteTasks", "click", loadTasks);
+on("startBtn", "click", () => control("resume"));
+on("pauseBtn", "click", () => control("pause"));
+on("stopBtn", "click", () => control("stop"));
+on("clearLogsBtn", "click", clearLogs);
+on("logoutBtn", "click", logout);
+on("refreshOps", "click", loadOps);
+on("userForm", "submit", async (event) => {
   event.preventDefault();
   const id = $("userId").value;
   const payload = {
@@ -494,38 +560,45 @@ $("userForm").addEventListener("submit", async (event) => {
     alert(err.message);
   }
 });
-$("licenseForm").addEventListener("submit", async (event) => {
+on("licenseForm", "submit", async (event) => {
   event.preventDefault();
   try{
-    await postJSON("/admin/licenses", {key:$("licenseKey").value.trim(), note:$("licenseNote").value.trim(), active:$("licenseActive").value === "true"});
+    await postJSON("/admin/licenses", {
+      key:$("licenseKey").value.trim(),
+      note:$("licenseNote").value.trim(),
+      active:$("licenseActive").value === "true",
+      maxUses:Number($("licenseMaxUses").value || 0)
+    });
     $("licenseKey").value = "";
     $("licenseNote").value = "";
+    $("licenseMaxUses").value = "1";
     $("licenseActive").value = "true";
     await loadOps();
   }catch(err){
     alert(err.message);
   }
 });
-$("logsForm").addEventListener("submit", async (event) => {
+on("deleteTaskForm", "submit", async (event) => {
   event.preventDefault();
-  if(!confirm("确定删除匹配条件的日志吗？")) return;
-  const params = new URLSearchParams();
-  if($("logPlatform").value.trim()) params.set("platform", $("logPlatform").value.trim());
-  if($("logAccount").value.trim()) params.set("account", $("logAccount").value.trim());
-  if($("logBefore").value.trim()) params.set("before", $("logBefore").value.trim());
+  const id = $("deleteTaskSelect").value;
+  if(!id){
+    alert("请选择要删除的任务");
+    return;
+  }
+  if(!confirm("确定删除这整条任务记录吗？")) return;
   try{
-    const res = await fetch("/admin/logs?" + params.toString(), {method:"DELETE"});
+    const res = await fetch("/admin/tasks/" + encodeURIComponent(id), {method:"DELETE"});
     const text = await res.text();
     if(!res.ok) throw new Error(text || res.statusText);
-    const data = text ? JSON.parse(text) : {removed:0};
-    alert("已删除 " + data.removed + " 条日志");
     await loadTasks();
   }catch(err){
     alert(err.message);
   }
 });
-loadTasks();
-setInterval(loadTasks, 3500);
+loadCurrentPage();
+if(page === "tasks"){
+  setInterval(loadTasks, 3500);
+}
 </script>
 </body>
 </html>`

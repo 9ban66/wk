@@ -82,6 +82,9 @@ func (s *Server) Run(addr string) error {
 	mux.HandleFunc("/auth/me", s.authMeHandler)
 	mux.HandleFunc("/license/verify", s.licenseVerifyHandler)
 	mux.HandleFunc("/admin", s.adminHandler)
+	mux.HandleFunc("/admin/users-page", s.adminPageHandler("users"))
+	mux.HandleFunc("/admin/licenses-page", s.adminPageHandler("licenses"))
+	mux.HandleFunc("/admin/delete-tasks", s.adminPageHandler("delete"))
 	mux.HandleFunc("/admin/login", s.adminLoginHandler)
 	mux.HandleFunc("/admin/logout", s.adminLogoutHandler)
 	mux.HandleFunc("/admin/stats", s.adminStatsHandler)
@@ -276,8 +279,22 @@ func (s *Server) adminHandler(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	s.renderAdminPage(w, "tasks")
+}
+
+func (s *Server) adminPageHandler(page string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		s.renderAdminPage(w, page)
+	}
+}
+
+func (s *Server) renderAdminPage(w http.ResponseWriter, page string) {
 	tmpl := newAdminTemplate()
-	if err := tmpl.Execute(w, nil); err != nil {
+	if err := tmpl.Execute(w, map[string]string{"Page": page}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -438,9 +455,10 @@ func (s *Server) adminLicensesHandler(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(s.accounts.listLicenses())
 	case http.MethodPost:
 		var payload struct {
-			Key    string `json:"key"`
-			Note   string `json:"note"`
-			Active *bool  `json:"active"`
+			Key     string `json:"key"`
+			Note    string `json:"note"`
+			Active  *bool  `json:"active"`
+			MaxUses int    `json:"maxUses"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -450,7 +468,7 @@ func (s *Server) adminLicensesHandler(w http.ResponseWriter, r *http.Request) {
 		if payload.Active != nil {
 			active = *payload.Active
 		}
-		key, err := s.accounts.addLicense(LicenseKey{Key: payload.Key, Note: payload.Note, Active: active})
+		key, err := s.accounts.addLicense(LicenseKey{Key: payload.Key, Note: payload.Note, Active: active, MaxUses: payload.MaxUses})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -543,6 +561,15 @@ func (s *Server) adminTaskHandler(w http.ResponseWriter, r *http.Request) {
 		s.taskEventsHandler(w, r, strings.TrimSuffix(path, "/events"))
 		return
 	}
+	if path != "" && r.Method == http.MethodDelete {
+		if !s.store.delete(path) {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+		return
+	}
 	http.NotFound(w, r)
 }
 
@@ -587,8 +614,12 @@ func (s *Server) submitHandler(w http.ResponseWriter, r *http.Request) {
 		AIType:     req.AIType,
 		Message:    req.Message,
 	})
+	if _, err := s.accounts.consumeLicense(user.ID, req.LicenseKey); err != nil {
+		s.store.delete(task.ID)
+		http.Error(w, "卡密扣次失败: "+err.Error(), http.StatusForbidden)
+		return
+	}
 	s.accounts.recordRun(user.ID)
-	s.accounts.touchLicenseUse(user.ID, req.LicenseKey)
 	s.store.appendLog(task.ID, "info", "任务已进入队列")
 	go s.runTask(task.ID)
 	w.Header().Set("Content-Type", "application/json")

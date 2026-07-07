@@ -242,6 +242,22 @@ func (s *taskStore) clearLogs(id string) bool {
 	})
 }
 
+func (s *taskStore) delete(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.byID[id]; !ok {
+		return false
+	}
+	delete(s.byID, id)
+	for index, task := range s.tasks {
+		if task.ID == id {
+			s.tasks = append(s.tasks[:index], s.tasks[index+1:]...)
+			return true
+		}
+	}
+	return true
+}
+
 func (s *taskStore) count() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
