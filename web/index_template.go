@@ -32,6 +32,7 @@ const indexHTML = `<!DOCTYPE html>
 body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",Arial,sans-serif}
 button,input,select,textarea{font:inherit}
 button{border:0;cursor:pointer}
+button,input,select,textarea{min-width:0}
 .shell{min-height:100vh;display:grid;grid-template-rows:auto 1fr}
 .topbar{height:64px;display:flex;align-items:center;justify-content:space-between;padding:0 28px;border-bottom:1px solid var(--line);background:rgba(255,255,255,.88);backdrop-filter:saturate(160%) blur(12px)}
 .brand{display:flex;align-items:center;gap:12px;font-weight:750;font-size:18px}
@@ -39,7 +40,7 @@ button{border:0;cursor:pointer}
 .statusline{font-size:13px;color:var(--muted)}
 .workspace{display:grid;grid-template-columns:minmax(420px,520px) minmax(0,1fr);gap:18px;padding:18px;max-width:1440px;width:100%;margin:0 auto}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow)}
-.panel-header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 18px;border-bottom:1px solid var(--line)}
+.panel-header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 18px;border-bottom:1px solid var(--line);flex-wrap:wrap}
 .panel-title{font-size:15px;font-weight:720}
 .panel-body{padding:18px}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
@@ -95,20 +96,81 @@ input:focus,select:focus,textarea:focus{border-color:var(--primary);box-shadow:0
 .query-results{margin-top:10px;border:1px solid var(--line);border-radius:8px;background:var(--panel-2);max-height:180px;overflow:auto}
 .query-item{display:grid;grid-template-columns:1fr auto;gap:10px;padding:10px 12px;border-bottom:1px solid var(--line);font-size:13px}
 .query-item:last-child{border-bottom:0}
+.top-tools{display:flex;align-items:center;gap:10px}
+.auth{position:fixed;inset:0;display:grid;place-items:center;background:rgba(246,248,251,.94);z-index:20}
+.auth-card{width:min(380px,calc(100vw - 32px));background:#fff;border:1px solid var(--line);border-radius:8px;padding:18px;box-shadow:var(--shadow)}
+.auth-card h1{font-size:18px;margin:0 0 12px}
+.auth-card form{display:grid;gap:10px}
+.auth-tabs{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}
+.auth-tabs button{height:34px;border-radius:7px;background:#eef2f7;color:#334155;font-weight:700}
+.auth-tabs button.active{background:var(--primary);color:#fff}
+.auth-error{min-height:18px;color:var(--bad);font-size:13px}
+.license-row{display:grid;grid-template-columns:1fr auto;gap:10px}
+.hidden{display:none!important}
 @media (max-width:980px){
   .workspace{grid-template-columns:1fr;padding:12px}
   .topbar{padding:0 16px}
   .grid{grid-template-columns:1fr}
   .split{grid-template-rows:auto auto}
   .query-form{grid-template-columns:1fr}
+  .license-row{grid-template-columns:1fr}
+}
+@media (max-width:680px){
+  body{background:#fff}
+  .topbar{height:auto;min-height:58px;align-items:flex-start;gap:8px;padding:10px 12px;flex-direction:column}
+  .brand{font-size:16px}.mark{width:26px;height:26px}
+  .top-tools{width:100%;justify-content:space-between;gap:8px}
+  .statusline{line-height:1.4}
+  .workspace{padding:8px;gap:10px}
+  .panel{box-shadow:none;border-radius:8px}
+  .panel-header{padding:12px}
+  .panel-body{padding:12px}
+  input,select,textarea{min-height:42px}
+  .actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .actions .btn,.license-row .btn{width:100%}
+  .course-tools{align-items:flex-start;flex-direction:column}
+  .course-tools .actions{width:100%;grid-template-columns:1fr 1fr}
+  .course-list{max-height:220px}
+  .course-item{grid-template-columns:24px 1fr;gap:8px;padding:10px}
+  .course-item input{width:18px;height:18px}
+  .badge{grid-column:2;justify-self:start;margin-top:2px}
+  .split{gap:10px}
+  .task-table,.task-table tbody,.task-table tr,.task-table td{display:block;width:100%}
+  .task-table thead{display:none}
+  .task-table td{display:grid;grid-template-columns:72px minmax(0,1fr);gap:8px;padding:6px 0;border:0;white-space:normal}
+  .task-table td::before{content:attr(data-label);color:var(--muted);font-weight:650}
+  .task-row{padding:10px 12px;border-bottom:1px solid var(--line)}
+  .task-row.active{border-left:3px solid var(--primary)}
+  .time-stack{min-width:0}
+  .task-actions{gap:8px}.task-actions .btn{flex:1;min-width:72px}
+  .log-window{height:260px;min-height:260px}
+  .query-results{max-height:240px}.query-item{grid-template-columns:1fr}
 }
 </style>
 </head>
 <body>
+<div class="auth" id="authPanel">
+  <div class="auth-card">
+    <h1>Yatori Web</h1>
+    <div class="auth-tabs">
+      <button type="button" class="active" id="loginTab">登录</button>
+      <button type="button" id="registerTab">注册</button>
+    </div>
+    <form id="authForm">
+      <input id="authUsername" autocomplete="username" placeholder="用户名" required>
+      <input id="authPassword" type="password" autocomplete="current-password" placeholder="密码" required>
+      <button class="btn primary" type="submit" id="authSubmit">登录</button>
+      <div class="auth-error" id="authError"></div>
+    </form>
+  </div>
+</div>
 <div class="shell">
   <header class="topbar">
     <div class="brand"><span class="mark"></span><span>Yatori Web</span></div>
-    <div class="statusline" id="summary">准备就绪</div>
+    <div class="top-tools">
+      <div class="statusline" id="summary">准备就绪</div>
+      <button class="btn ghost" type="button" id="logoutBtn">退出</button>
+    </div>
   </header>
   <main class="workspace">
     <section class="panel">
@@ -166,6 +228,14 @@ input:focus,select:focus,textarea:focus{border-color:var(--primary);box-shadow:0
             <div class="field full">
               <label for="message">备注</label>
               <textarea id="message" name="message" placeholder="可选"></textarea>
+            </div>
+            <div class="field full">
+              <label for="licenseKey">卡密</label>
+              <div class="license-row">
+                <input id="licenseKey" name="licenseKey" placeholder="输入卡密后验证">
+                <button class="btn ghost" type="button" id="verifyLicense">验证卡密</button>
+              </div>
+              <span class="hint" id="licenseHint">提交任务前需要验证卡密</span>
             </div>
           </div>
           <div class="course-tools">
@@ -231,7 +301,7 @@ input:focus,select:focus,textarea:focus{border-color:var(--primary);box-shadow:0
   </main>
 </div>
 <script>
-const state = { courses: [], tasks: [], selectedTask: "", events: null };
+const state = { courses: [], tasks: [], selectedTask: "", events: null, user: null, authMode: "login", verifiedLicense: "" };
 const $ = (id) => document.getElementById(id);
 const statusText = {queued:"排队中",running:"运行中",paused:"已暂停",stopped:"已停止",succeeded:"已完成",failed:"失败"};
 
@@ -246,6 +316,7 @@ function payloadFromForm(){
     aiKey:$("aiKey").value.trim(),
     aiType:$("aiType").value,
     message:$("message").value.trim(),
+    licenseKey:$("licenseKey").value.trim(),
     courseIds:[...document.querySelectorAll("input[name=courseId]:checked")].map(i=>i.value)
   };
 }
@@ -289,17 +360,17 @@ function renderTasks(){
   }
   body.innerHTML = state.tasks.slice().reverse().map(t =>
     '<tr class="task-row ' + (t.id===state.selectedTask ? "active" : "") + '" data-id="' + escapeHTML(t.id) + '">' +
-      '<td><strong>' + escapeHTML(t.platform) + '</strong><br><span class="hint">' + escapeHTML(t.id) + '</span><br><span class="hint">' + escapeHTML(t.message || "") + '</span></td>' +
-      '<td>' + escapeHTML(t.account) + '</td>' +
-      '<td><span class="time-stack">' +
+      '<td data-label="任务"><strong>' + escapeHTML(t.platform) + '</strong><br><span class="hint">' + escapeHTML(t.id) + '</span><br><span class="hint">' + escapeHTML(t.message || "") + '</span></td>' +
+      '<td data-label="账号">' + escapeHTML(t.account) + '</td>' +
+      '<td data-label="时间"><span class="time-stack">' +
         '<span>提交 ' + escapeHTML(formatTime(t.createdAt)) + '</span>' +
         '<span>开始 ' + escapeHTML(formatTime(t.startedAt)) + '</span>' +
         '<span>结束 ' + escapeHTML(formatTime(t.endedAt)) + '</span>' +
         '<span>运行 ' + escapeHTML(formatDuration(t)) + '</span>' +
       '</span></td>' +
-      '<td><span class="status ' + escapeHTML(t.status) + '">' + escapeHTML(statusText[t.status] || t.status) + '</span></td>' +
-      '<td>' + ((t.courseIds && t.courseIds.length) ? escapeHTML(t.courseIds.length + " 门") : "全部") + '</td>' +
-      '<td><span class="task-actions">' + actionButtons(t) + '</span></td>' +
+      '<td data-label="状态"><span class="status ' + escapeHTML(t.status) + '">' + escapeHTML(statusText[t.status] || t.status) + '</span></td>' +
+      '<td data-label="课程">' + ((t.courseIds && t.courseIds.length) ? escapeHTML(t.courseIds.length + " 门") : "全部") + '</td>' +
+      '<td data-label="控制"><span class="task-actions">' + actionButtons(t) + '</span></td>' +
     '</tr>').join("");
   document.querySelectorAll(".task-row").forEach(row => row.addEventListener("click", () => selectTask(row.dataset.id)));
   document.querySelectorAll("[data-action]").forEach(btn => btn.addEventListener("click", (event) => {
@@ -365,10 +436,15 @@ function appendLog(log){
 
 async function loadTasks(){
   const res = await fetch("/tasks");
+  if(res.status === 401){
+    showAuth();
+    return;
+  }
   state.tasks = await res.json();
   renderTasks();
   const running = state.tasks.filter(t => t.status === "running").length;
-  $("summary").textContent = state.tasks.length ? "任务 " + state.tasks.length + " 个，运行中 " + running + " 个" : "准备就绪";
+  const userText = state.user ? state.user.username + " · " : "";
+  $("summary").textContent = userText + (state.tasks.length ? "任务 " + state.tasks.length + " 个，运行中 " + running + " 个" : "准备就绪");
 }
 
 async function selectTask(id){
@@ -446,6 +522,15 @@ $("toggleCourses").addEventListener("click", () => {
 
 $("taskForm").addEventListener("submit", async (event) => {
   event.preventDefault();
+  const licenseKey = $("licenseKey").value.trim();
+  if(!state.user){
+    showAuth();
+    return;
+  }
+  if(!licenseKey || licenseKey !== state.verifiedLicense){
+    alert("请先验证卡密");
+    return;
+  }
   const btn = $("submitTask");
   btn.disabled = true;
   try{
@@ -477,7 +562,94 @@ $("queryAccount").addEventListener("keydown", (event) => {
     $("queryTasks").click();
   }
 });
-loadTasks();
+
+function showAuth(){
+  $("authPanel").classList.remove("hidden");
+}
+
+function hideAuth(){
+  $("authPanel").classList.add("hidden");
+  $("authError").textContent = "";
+}
+
+function setAuthMode(mode){
+  state.authMode = mode;
+  $("loginTab").classList.toggle("active", mode === "login");
+  $("registerTab").classList.toggle("active", mode === "register");
+  $("authSubmit").textContent = mode === "login" ? "登录" : "注册";
+}
+
+async function refreshMe(){
+  const res = await fetch("/auth/me");
+  if(res.status === 401){
+    state.user = null;
+    showAuth();
+    return false;
+  }
+  const data = await res.json();
+  state.user = data.user;
+  hideAuth();
+  return true;
+}
+
+async function authSubmit(){
+  const username = $("authUsername").value.trim();
+  const password = $("authPassword").value;
+  const endpoint = state.authMode === "login" ? "/auth/login" : "/auth/register";
+  await postJSON(endpoint, {username, password});
+  if(state.authMode === "register"){
+    await postJSON("/auth/login", {username, password});
+  }
+  await refreshMe();
+  await loadTasks();
+}
+
+async function logout(){
+  await fetch("/auth/logout", {method:"POST"});
+  state.user = null;
+  state.tasks = [];
+  state.verifiedLicense = "";
+  $("licenseHint").textContent = "提交任务前需要验证卡密";
+  renderTasks();
+  showAuth();
+}
+
+$("authForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try{
+    await authSubmit();
+  }catch(err){
+    $("authError").textContent = err.message;
+  }
+});
+$("loginTab").addEventListener("click", () => setAuthMode("login"));
+$("registerTab").addEventListener("click", () => setAuthMode("register"));
+$("logoutBtn").addEventListener("click", logout);
+$("verifyLicense").addEventListener("click", async () => {
+  const key = $("licenseKey").value.trim();
+  if(!key){
+    $("licenseHint").textContent = "请输入卡密";
+    return;
+  }
+  try{
+    await postJSON("/license/verify", {key});
+    state.verifiedLicense = key;
+    $("licenseHint").textContent = "卡密验证成功";
+  }catch(err){
+    state.verifiedLicense = "";
+    $("licenseHint").textContent = err.message;
+  }
+});
+$("licenseKey").addEventListener("input", () => {
+  if($("licenseKey").value.trim() !== state.verifiedLicense){
+    state.verifiedLicense = "";
+    $("licenseHint").textContent = "提交任务前需要验证卡密";
+  }
+});
+
+refreshMe().then(ok => {
+  if(ok) loadTasks();
+});
 setInterval(loadTasks, 3500);
 </script>
 </body>

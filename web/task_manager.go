@@ -19,6 +19,9 @@ const (
 
 type Task struct {
 	ID             string     `json:"id"`
+	UserID         string     `json:"userId,omitempty"`
+	Username       string     `json:"username,omitempty"`
+	LicenseKey     string     `json:"licenseKey,omitempty"`
 	Platform       string     `json:"platform"`
 	Account        string     `json:"account"`
 	Password       string     `json:"password"`
@@ -81,11 +84,42 @@ func (s *taskStore) list() []Task {
 	return out
 }
 
+func (s *taskStore) listForUser(userID string) []Task {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]Task, 0, len(s.tasks))
+	for _, task := range s.tasks {
+		if task.UserID == userID {
+			out = append(out, *task)
+		}
+	}
+	return out
+}
+
 func (s *taskStore) find(platform, account string) []Task {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]Task, 0)
 	for _, task := range s.tasks {
+		if platform != "" && task.Platform != platform {
+			continue
+		}
+		if account != "" && task.Account != account {
+			continue
+		}
+		out = append(out, *task)
+	}
+	return out
+}
+
+func (s *taskStore) findForUser(userID, platform, account string) []Task {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]Task, 0)
+	for _, task := range s.tasks {
+		if task.UserID != userID {
+			continue
+		}
 		if platform != "" && task.Platform != platform {
 			continue
 		}
@@ -206,4 +240,63 @@ func (s *taskStore) clearLogs(id string) bool {
 	return s.update(id, func(task *Task) {
 		task.Logs = nil
 	})
+}
+
+func (s *taskStore) count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.tasks)
+}
+
+func (s *taskStore) runningCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	count := 0
+	for _, task := range s.tasks {
+		if task.Status == TaskRunning {
+			count++
+		}
+	}
+	return count
+}
+
+func (s *taskStore) logCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	count := 0
+	for _, task := range s.tasks {
+		count += len(task.Logs)
+	}
+	return count
+}
+
+func (s *taskStore) clearLogsByFilter(platform, account string, before *time.Time) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	removed := 0
+	for _, task := range s.tasks {
+		if platform != "" && task.Platform != platform {
+			continue
+		}
+		if account != "" && task.Account != account {
+			continue
+		}
+		if before == nil {
+			removed += len(task.Logs)
+			task.Logs = nil
+			task.UpdatedAt = time.Now()
+			continue
+		}
+		kept := task.Logs[:0]
+		for _, item := range task.Logs {
+			if item.At.Before(*before) {
+				removed++
+				continue
+			}
+			kept = append(kept, item)
+		}
+		task.Logs = kept
+		task.UpdatedAt = time.Now()
+	}
+	return removed
 }

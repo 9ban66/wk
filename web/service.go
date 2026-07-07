@@ -23,22 +23,25 @@ import (
 )
 
 type Server struct {
-	store *taskStore
+	store    *taskStore
+	accounts *accountStore
 }
 
 const adminCookieName = "yatori_admin_key"
+const userCookieName = "yatori_user_session"
 
 type taskRequest struct {
-	Platform  string   `json:"platform"`
-	Account   string   `json:"account"`
-	Password  string   `json:"password"`
-	PreURL    string   `json:"preUrl"`
-	CourseIDs []string `json:"courseIds"`
-	AIURL     string   `json:"aiUrl"`
-	AIModel   string   `json:"aiModel"`
-	AIKey     string   `json:"aiKey"`
-	AIType    string   `json:"aiType"`
-	Message   string   `json:"message"`
+	Platform   string   `json:"platform"`
+	Account    string   `json:"account"`
+	Password   string   `json:"password"`
+	PreURL     string   `json:"preUrl"`
+	CourseIDs  []string `json:"courseIds"`
+	AIURL      string   `json:"aiUrl"`
+	AIModel    string   `json:"aiModel"`
+	AIKey      string   `json:"aiKey"`
+	AIType     string   `json:"aiType"`
+	Message    string   `json:"message"`
+	LicenseKey string   `json:"licenseKey"`
 }
 
 type CourseOption struct {
@@ -51,6 +54,9 @@ type CourseOption struct {
 
 type TaskSummary struct {
 	ID             string     `json:"id"`
+	UserID         string     `json:"userId,omitempty"`
+	Username       string     `json:"username,omitempty"`
+	LicenseKey     string     `json:"licenseKey,omitempty"`
 	Platform       string     `json:"platform"`
 	Account        string     `json:"account"`
 	CourseIDs      []string   `json:"courseIds"`
@@ -64,15 +70,26 @@ type TaskSummary struct {
 }
 
 func NewServer() *Server {
-	return &Server{store: newTaskStore()}
+	return &Server{store: newTaskStore(), accounts: newAccountStore()}
 }
 
 func (s *Server) Run(addr string) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.indexHandler)
+	mux.HandleFunc("/auth/register", s.authRegisterHandler)
+	mux.HandleFunc("/auth/login", s.authLoginHandler)
+	mux.HandleFunc("/auth/logout", s.authLogoutHandler)
+	mux.HandleFunc("/auth/me", s.authMeHandler)
+	mux.HandleFunc("/license/verify", s.licenseVerifyHandler)
 	mux.HandleFunc("/admin", s.adminHandler)
 	mux.HandleFunc("/admin/login", s.adminLoginHandler)
 	mux.HandleFunc("/admin/logout", s.adminLogoutHandler)
+	mux.HandleFunc("/admin/stats", s.adminStatsHandler)
+	mux.HandleFunc("/admin/users", s.adminUsersHandler)
+	mux.HandleFunc("/admin/users/", s.adminUserHandler)
+	mux.HandleFunc("/admin/licenses", s.adminLicensesHandler)
+	mux.HandleFunc("/admin/licenses/", s.adminLicenseHandler)
+	mux.HandleFunc("/admin/logs", s.adminLogsHandler)
 	mux.HandleFunc("/admin/tasks", s.adminTasksHandler)
 	mux.HandleFunc("/admin/tasks/", s.adminTaskHandler)
 	mux.HandleFunc("/courses", s.coursesHandler)
@@ -89,6 +106,133 @@ func adminKey() string {
 		return key
 	}
 	return "yatori-admin"
+}
+
+func (s *Server) currentUser(r *http.Request) (UserSummary, bool) {
+	cookie, err := r.Cookie(userCookieName)
+	if err != nil {
+		return UserSummary{}, false
+	}
+	return s.accounts.userBySession(strings.TrimSpace(cookie.Value))
+}
+
+func (s *Server) requireUser(w http.ResponseWriter, r *http.Request) (UserSummary, bool) {
+	user, ok := s.currentUser(r)
+	if ok {
+		return user, true
+	}
+	http.Error(w, "请先登录", http.StatusUnauthorized)
+	return UserSummary{}, false
+}
+
+func (s *Server) authRegisterHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var payload struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	user, err := s.accounts.register(payload.Username, payload.Password)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "user": user})
+}
+
+func (s *Server) authLoginHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var payload struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	token, user, err := s.accounts.login(payload.Username, payload.Password)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     userCookieName,
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   86400 * 30,
+	})
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "user": user})
+}
+
+func (s *Server) authLogoutHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if cookie, err := r.Cookie(userCookieName); err == nil {
+		s.accounts.logout(cookie.Value)
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     userCookieName,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   -1,
+	})
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+}
+
+func (s *Server) authMeHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	user, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "user": user})
+}
+
+func (s *Server) licenseVerifyHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	user, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
+	var payload struct {
+		Key string `json:"key"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	key, err := s.accounts.verifyLicense(user.ID, payload.Key)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "license": key})
 }
 
 func (s *Server) isAdminRequest(r *http.Request) bool {
@@ -184,6 +328,183 @@ func (s *Server) adminLogoutHandler(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
 }
 
+func (s *Server) adminStatsHandler(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	stats := AppStats{
+		UserCount:    len(s.accounts.listUsers()),
+		RunCount:     s.accounts.totalRunCount(),
+		TotalTasks:   s.store.count(),
+		RunningTasks: s.store.runningCount(),
+		TotalLogs:    s.store.logCount(),
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(stats)
+}
+
+func (s *Server) adminUsersHandler(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(s.accounts.listUsers())
+	case http.MethodPost:
+		var payload struct {
+			Username  string `json:"username"`
+			Password  string `json:"password"`
+			Disabled  *bool  `json:"disabled"`
+			CreatedAt string `json:"createdAt"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		createdAt, err := parseOptionalTime(payload.CreatedAt)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		user, err := s.accounts.upsertUser("", payload.Username, payload.Password, payload.Disabled, createdAt)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "user": user})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) adminUserHandler(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/admin/users/")
+	if id == "" {
+		http.NotFound(w, r)
+		return
+	}
+	switch r.Method {
+	case http.MethodPut:
+		var payload struct {
+			Username  string `json:"username"`
+			Password  string `json:"password"`
+			Disabled  *bool  `json:"disabled"`
+			CreatedAt string `json:"createdAt"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		createdAt, err := parseOptionalTime(payload.CreatedAt)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		user, err := s.accounts.upsertUser(id, payload.Username, payload.Password, payload.Disabled, createdAt)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "user": user})
+	case http.MethodDelete:
+		if !s.accounts.deleteUser(id) {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) adminLicensesHandler(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(s.accounts.listLicenses())
+	case http.MethodPost:
+		var payload struct {
+			Key    string `json:"key"`
+			Note   string `json:"note"`
+			Active *bool  `json:"active"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		active := true
+		if payload.Active != nil {
+			active = *payload.Active
+		}
+		key, err := s.accounts.addLicense(LicenseKey{Key: payload.Key, Note: payload.Note, Active: active})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "license": key})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) adminLicenseHandler(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	key := strings.TrimPrefix(r.URL.Path, "/admin/licenses/")
+	if key == "" {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodDelete {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.accounts.deleteLicense(key) {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+}
+
+func (s *Server) adminLogsHandler(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	if r.Method != http.MethodDelete {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	before, err := parseOptionalTime(r.URL.Query().Get("before"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	removed := s.store.clearLogsByFilter(
+		strings.TrimSpace(r.URL.Query().Get("platform")),
+		strings.TrimSpace(r.URL.Query().Get("account")),
+		before,
+	)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "removed": removed})
+}
+
 func (s *Server) adminTasksHandler(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAdmin(w, r) {
 		return
@@ -230,9 +551,17 @@ func (s *Server) submitHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	user, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
 	req, err := parseTaskRequest(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if _, err := s.accounts.verifyLicense(user.ID, req.LicenseKey); err != nil {
+		http.Error(w, "卡密验证失败: "+err.Error(), http.StatusForbidden)
 		return
 	}
 	if req.Platform == "" || req.Account == "" || req.Password == "" {
@@ -244,17 +573,22 @@ func (s *Server) submitHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	task := s.store.enqueue(Task{
-		Platform:  req.Platform,
-		Account:   req.Account,
-		Password:  req.Password,
-		PreURL:    req.PreURL,
-		CourseIDs: req.CourseIDs,
-		AIURL:     req.AIURL,
-		AIModel:   req.AIModel,
-		AIKey:     req.AIKey,
-		AIType:    req.AIType,
-		Message:   req.Message,
+		UserID:     user.ID,
+		Username:   user.Username,
+		LicenseKey: req.LicenseKey,
+		Platform:   req.Platform,
+		Account:    req.Account,
+		Password:   req.Password,
+		PreURL:     req.PreURL,
+		CourseIDs:  req.CourseIDs,
+		AIURL:      req.AIURL,
+		AIModel:    req.AIModel,
+		AIKey:      req.AIKey,
+		AIType:     req.AIType,
+		Message:    req.Message,
 	})
+	s.accounts.recordRun(user.ID)
+	s.accounts.touchLicenseUse(user.ID, req.LicenseKey)
 	s.store.appendLog(task.ID, "info", "任务已进入队列")
 	go s.runTask(task.ID)
 	w.Header().Set("Content-Type", "application/json")
@@ -272,16 +606,17 @@ func parseTaskRequest(r *http.Request) (taskRequest, error) {
 			return taskRequest{}, err
 		}
 		req = taskRequest{
-			Platform:  r.Form.Get("platform"),
-			Account:   r.Form.Get("account"),
-			Password:  r.Form.Get("password"),
-			PreURL:    r.Form.Get("preUrl"),
-			CourseIDs: r.Form["courseIds"],
-			AIURL:     r.Form.Get("aiUrl"),
-			AIModel:   r.Form.Get("aiModel"),
-			AIKey:     r.Form.Get("aiKey"),
-			AIType:    r.Form.Get("aiType"),
-			Message:   r.Form.Get("message"),
+			Platform:   r.Form.Get("platform"),
+			Account:    r.Form.Get("account"),
+			Password:   r.Form.Get("password"),
+			PreURL:     r.Form.Get("preUrl"),
+			CourseIDs:  r.Form["courseIds"],
+			AIURL:      r.Form.Get("aiUrl"),
+			AIModel:    r.Form.Get("aiModel"),
+			AIKey:      r.Form.Get("aiKey"),
+			AIType:     r.Form.Get("aiType"),
+			Message:    r.Form.Get("message"),
+			LicenseKey: r.Form.Get("licenseKey"),
 		}
 		if len(req.CourseIDs) == 0 {
 			req.CourseIDs = r.Form["courseId"]
@@ -296,6 +631,7 @@ func parseTaskRequest(r *http.Request) (taskRequest, error) {
 	req.AIKey = strings.TrimSpace(req.AIKey)
 	req.AIType = strings.TrimSpace(req.AIType)
 	req.Message = strings.TrimSpace(req.Message)
+	req.LicenseKey = strings.TrimSpace(req.LicenseKey)
 	req.CourseIDs = cleanStringList(req.CourseIDs)
 	return req, nil
 }
@@ -436,9 +772,30 @@ func courseEnded(end time.Time) bool {
 	return time.Now().After(end.AddDate(0, 0, 1))
 }
 
+func parseOptionalTime(value string) (*time.Time, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
+	layouts := []string{time.RFC3339, "2006-01-02 15:04:05", "2006-01-02"}
+	var lastErr error
+	for _, layout := range layouts {
+		parsed, err := time.ParseInLocation(layout, value, time.Local)
+		if err == nil {
+			return &parsed, nil
+		}
+		lastErr = err
+	}
+	return nil, fmt.Errorf("时间格式错误: %w", lastErr)
+}
+
 func (s *Server) tasksHandler(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(summarizeTasks(s.store.list()))
+	_ = json.NewEncoder(w).Encode(summarizeTasks(s.store.listForUser(user.ID)))
 }
 
 func (s *Server) taskQueryHandler(w http.ResponseWriter, r *http.Request) {
@@ -452,13 +809,20 @@ func (s *Server) taskQueryHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "平台和账号不能为空", http.StatusBadRequest)
 		return
 	}
+	user, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(summarizeTasks(s.store.find(platform, account)))
+	_ = json.NewEncoder(w).Encode(summarizeTasks(s.store.findForUser(user.ID, platform, account)))
 }
 
 func summarizeTask(task Task) TaskSummary {
 	return TaskSummary{
 		ID:             task.ID,
+		UserID:         task.UserID,
+		Username:       task.Username,
+		LicenseKey:     task.LicenseKey,
 		Platform:       task.Platform,
 		Account:        task.Account,
 		CourseIDs:      task.CourseIDs,
@@ -483,15 +847,27 @@ func summarizeTasks(tasks []Task) []TaskSummary {
 func (s *Server) taskHandler(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/tasks/")
 	if strings.HasSuffix(path, "/logs") {
-		s.taskLogsHandler(w, r, strings.TrimSuffix(path, "/logs"))
+		id := strings.TrimSuffix(path, "/logs")
+		if !s.canAccessTask(w, r, id) {
+			return
+		}
+		s.taskLogsHandler(w, r, id)
 		return
 	}
 	if strings.HasSuffix(path, "/events") {
-		s.taskEventsHandler(w, r, strings.TrimSuffix(path, "/events"))
+		id := strings.TrimSuffix(path, "/events")
+		if !s.canAccessTask(w, r, id) {
+			return
+		}
+		s.taskEventsHandler(w, r, id)
 		return
 	}
 	if strings.HasSuffix(path, "/control") {
-		s.taskControlHandler(w, r, strings.TrimSuffix(path, "/control"))
+		id := strings.TrimSuffix(path, "/control")
+		if !s.canAccessTask(w, r, id) {
+			return
+		}
+		s.taskControlHandler(w, r, id)
 		return
 	}
 	id := path
@@ -504,8 +880,31 @@ func (s *Server) taskHandler(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if !s.canAccessTask(w, r, id) {
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(summarizeTask(task))
+}
+
+func (s *Server) canAccessTask(w http.ResponseWriter, r *http.Request, id string) bool {
+	task, ok := s.store.get(id)
+	if !ok {
+		http.NotFound(w, r)
+		return false
+	}
+	if s.isAdminRequest(r) {
+		return true
+	}
+	user, ok := s.requireUser(w, r)
+	if !ok {
+		return false
+	}
+	if task.UserID == "" || task.UserID == user.ID {
+		return true
+	}
+	http.Error(w, "无权访问该任务", http.StatusForbidden)
+	return false
 }
 
 func (s *Server) taskControlHandler(w http.ResponseWriter, r *http.Request, id string) {
