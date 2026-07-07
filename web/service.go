@@ -456,6 +456,7 @@ func (s *Server) adminLicensesHandler(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPost:
 		var payload struct {
 			Key     string `json:"key"`
+			Prefix  string `json:"prefix"`
 			Note    string `json:"note"`
 			Active  *bool  `json:"active"`
 			MaxUses int    `json:"maxUses"`
@@ -468,7 +469,11 @@ func (s *Server) adminLicensesHandler(w http.ResponseWriter, r *http.Request) {
 		if payload.Active != nil {
 			active = *payload.Active
 		}
-		key, err := s.accounts.addLicense(LicenseKey{Key: payload.Key, Note: payload.Note, Active: active, MaxUses: payload.MaxUses})
+		keyValue := strings.TrimSpace(payload.Key)
+		if keyValue == "" {
+			keyValue = randomReadableKey(payload.Prefix)
+		}
+		key, err := s.accounts.addLicense(LicenseKey{Key: keyValue, Note: payload.Note, Active: active, MaxUses: payload.MaxUses})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return

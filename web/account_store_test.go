@@ -28,3 +28,10 @@ func TestLicenseVerifyDoesNotConsume(t *testing.T) {
 		t.Fatalf("consume should decrement remaining, got uses=%d remaining=%d", used.Uses, used.Remaining)
 	}
 }
+
+func TestRandomReadableKeyUsesCustomPrefix(t *testing.T) {
+	key := randomReadableKey("vip")
+	if len(key) <= 4 || key[:4] != "VIP-" {
+		t.Fatalf("expected generated key to use VIP prefix, got %q", key)
+	}
+}

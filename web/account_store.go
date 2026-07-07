@@ -238,7 +238,7 @@ func (s *accountStore) addLicense(key LicenseKey) (LicenseKey, error) {
 func (s *accountStore) addLicenseLocked(key LicenseKey) (LicenseKey, error) {
 	key.Key = strings.TrimSpace(key.Key)
 	if key.Key == "" {
-		key.Key = randomReadableKey()
+		key.Key = randomReadableKey("YATORI")
 	}
 	if _, ok := s.licenses[key.Key]; ok {
 		return LicenseKey{}, errors.New("卡密已存在")
@@ -357,11 +357,20 @@ func randomToken() string {
 	return base64.RawURLEncoding.EncodeToString(data[:])
 }
 
-func randomReadableKey() string {
+func randomReadableKey(prefix string) string {
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		prefix = "YATORI"
+	}
+	prefix = strings.ToUpper(prefix)
+	prefix = strings.NewReplacer(" ", "", "-", "", "_", "").Replace(prefix)
+	if prefix == "" {
+		prefix = "YATORI"
+	}
 	token := strings.ToUpper(randomToken())
 	token = strings.NewReplacer("-", "", "_", "").Replace(token)
 	if len(token) > 20 {
 		token = token[:20]
 	}
-	return "YATORI-" + token
+	return prefix + "-" + token
 }

@@ -63,9 +63,9 @@ tr.active{background:#eef5ff}
 .stat{border:1px solid var(--line);border-radius:8px;padding:10px;background:#f8fafc}
 .stat strong{display:block;font-size:20px;margin-bottom:3px}
 .mini-form{display:grid;grid-template-columns:repeat(4,minmax(120px,1fr)) auto;gap:8px;padding:12px 14px;border-bottom:1px solid var(--line)}
+.mini-form.license-form{grid-template-columns:repeat(5,minmax(120px,1fr)) auto}
 .mini-form.logs{grid-template-columns:repeat(3,minmax(120px,1fr)) auto}
 .delete-form{display:grid;gap:12px;padding:14px}
-.task-select{width:100%;min-height:360px;border:1px solid var(--line);border-radius:8px;padding:8px;font:13px Consolas,"Cascadia Mono",monospace}
 .subgrid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 .mini-table{max-height:260px;overflow:auto}
 .mini-table tr{cursor:default}
@@ -75,7 +75,7 @@ tr.active{background:#eef5ff}
 .auth-card form{display:grid;gap:10px}
 .auth-error{min-height:18px;color:var(--bad);font-size:13px}
 .hidden{display:none!important}
-@media (max-width:1100px){.layout{grid-template-columns:1fr}.log-box{height:360px}.table-wrap{max-height:none}.subgrid,.stats,.mini-form,.mini-form.logs{grid-template-columns:1fr}}
+@media (max-width:1100px){.layout{grid-template-columns:1fr}.log-box{height:360px}.table-wrap{max-height:none}.subgrid,.stats,.mini-form,.mini-form.license-form,.mini-form.logs{grid-template-columns:1fr}}
 @media (max-width:680px){
   body{background:#fff}
   .topbar{height:auto;min-height:56px;align-items:flex-start;gap:8px;padding:10px 12px;flex-direction:column}
@@ -201,8 +201,9 @@ tr.active{background:#eef5ff}
     <div class="ops">
       <div class="panel">
         <div class="panel-head"><span>卡密</span></div>
-        <form class="mini-form" id="licenseForm">
+        <form class="mini-form license-form" id="licenseForm">
           <input id="licenseKey" placeholder="留空自动生成">
+          <input id="licensePrefix" placeholder="自定义前缀，默认 YATORI">
           <input id="licenseNote" placeholder="备注">
           <input id="licenseMaxUses" type="number" min="0" value="1" placeholder="可用次数，0不限">
           <select id="licenseActive"><option value="true">启用</option><option value="false">禁用</option></select>
@@ -224,11 +225,24 @@ tr.active{background:#eef5ff}
       <span>删除任务记录</span>
       <div class="tools"><button class="btn" id="refreshDeleteTasks">刷新</button></div>
     </div>
-    <form class="delete-form" id="deleteTaskForm">
-      <select id="deleteTaskSelect" class="task-select" size="14"></select>
-      <button class="btn danger" type="submit">删除选中的整条任务</button>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>平台</th>
+            <th>账号</th>
+            <th>提交时间</th>
+            <th>状态</th>
+            <th>摘要</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="deleteTasks"><tr><td colspan="6" class="muted">加载中</td></tr></tbody>
+      </table>
+    </div>
+    <div class="delete-form">
       <div class="muted">这里删除的是任务记录本身，包括状态和日志，不只是清空日志。</div>
-    </form>
+    </div>
   </section>
   {{end}}
 </main>
@@ -341,7 +355,7 @@ async function loadTasks(){
   state.tasks = await res.json();
   hideLogin();
   renderTasks();
-  renderDeleteTaskOptions();
+  renderDeleteTasks();
   const running = state.tasks.filter(t => t.status === "running").length;
   if($("summary")) $("summary").textContent = "任务 " + state.tasks.length + " 个，运行中 " + running + " 个";
   renderDetail(state.tasks.find(t => t.id === state.selected));
@@ -358,6 +372,7 @@ async function loadOps(){
     return;
   }
   if(!statsRes.ok || !usersRes.ok || !licensesRes.ok) return;
+  hideLogin();
   if($("stats")) renderStats(await statsRes.json());
   if($("users")) renderUsers(await usersRes.json());
   if($("licenses")) renderLicenses(await licensesRes.json());
@@ -424,17 +439,26 @@ function renderLicenses(items){
   }));
 }
 
-function renderDeleteTaskOptions(){
-  const box = $("deleteTaskSelect");
-  if(!box) return;
+function renderDeleteTasks(){
+  const body = $("deleteTasks");
+  if(!body) return;
   if(!state.tasks.length){
-    box.innerHTML = '<option value="">暂无任务</option>';
+    body.innerHTML = '<tr><td colspan="6" class="muted">暂无任务</td></tr>';
     return;
   }
-  box.innerHTML = state.tasks.slice().reverse().map(t => {
-    const text = [t.id, t.platform, t.account, statusText[t.status] || t.status, formatTime(t.createdAt), t.message || ""].filter(Boolean).join(" | ");
-    return '<option value="' + escapeHTML(t.id) + '">' + escapeHTML(text) + '</option>';
-  }).join("");
+  body.innerHTML = state.tasks.slice().reverse().map(t =>
+    '<tr data-delete-id="' + escapeHTML(t.id) + '">' +
+      '<td data-label="平台">' + escapeHTML(t.platform) + '<br><span class="muted">' + escapeHTML(t.id) + '</span></td>' +
+      '<td data-label="账号">' + escapeHTML(t.account) + '</td>' +
+      '<td data-label="提交时间">' + escapeHTML(formatTime(t.createdAt)) + '</td>' +
+      '<td data-label="状态"><span class="status ' + escapeHTML(t.status) + '">' + escapeHTML(statusText[t.status] || t.status) + '</span></td>' +
+      '<td data-label="摘要" class="message">' + escapeHTML(t.message || "") + '</td>' +
+      '<td data-label="操作"><button class="btn mini danger" data-delete-task="' + escapeHTML(t.id) + '">删除</button></td>' +
+    '</tr>').join("");
+  document.querySelectorAll("[data-delete-task]").forEach(btn => btn.addEventListener("click", async (event) => {
+    event.stopPropagation();
+    await deleteTask(btn.dataset.deleteTask);
+  }));
 }
 
 async function selectTask(id){
@@ -565,11 +589,13 @@ on("licenseForm", "submit", async (event) => {
   try{
     await postJSON("/admin/licenses", {
       key:$("licenseKey").value.trim(),
+      prefix:$("licensePrefix").value.trim(),
       note:$("licenseNote").value.trim(),
       active:$("licenseActive").value === "true",
       maxUses:Number($("licenseMaxUses").value || 0)
     });
     $("licenseKey").value = "";
+    $("licensePrefix").value = "";
     $("licenseNote").value = "";
     $("licenseMaxUses").value = "1";
     $("licenseActive").value = "true";
@@ -578,9 +604,7 @@ on("licenseForm", "submit", async (event) => {
     alert(err.message);
   }
 });
-on("deleteTaskForm", "submit", async (event) => {
-  event.preventDefault();
-  const id = $("deleteTaskSelect").value;
+async function deleteTask(id){
   if(!id){
     alert("请选择要删除的任务");
     return;
@@ -594,7 +618,7 @@ on("deleteTaskForm", "submit", async (event) => {
   }catch(err){
     alert(err.message);
   }
-});
+}
 loadCurrentPage();
 if(page === "tasks"){
   setInterval(loadTasks, 3500);
